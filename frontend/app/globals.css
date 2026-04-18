@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  height: 100%;
+}
+
+/* LP背景クリエイティブ（白ベース・パステル5種）。キーは API の lp_background_key と対応 */
+.lp-bg-pastel-lavender {
+  background:
+    radial-gradient(circle at 14% 10%, rgba(196, 181, 253, 0.55), transparent 46%),
+    radial-gradient(circle at 86% 16%, rgba(251, 207, 232, 0.42), transparent 42%),
+    radial-gradient(circle at 20% 88%, rgba(167, 139, 250, 0.22), transparent 50%),
+    radial-gradient(rgba(15, 23, 42, 0.045) 1px, transparent 1px),
+    linear-gradient(180deg, #ffffff 0%, #faf8ff 48%, #f3efff 100%);
+  background-size: auto, auto, auto, 26px 26px, auto;
+  background-position: center, center, center, 0 0, center;
+}
+
+.lp-bg-pastel-mint {
+  background:
+    radial-gradient(circle at 12% 14%, rgba(167, 243, 208, 0.55), transparent 46%),
+    radial-gradient(circle at 84% 18%, rgba(153, 246, 228, 0.4), transparent 44%),
+    radial-gradient(circle at 28% 86%, rgba(110, 231, 183, 0.22), transparent 50%),
+    radial-gradient(rgba(15, 23, 42, 0.045) 1px, transparent 1px),
+    linear-gradient(180deg, #ffffff 0%, #f5fef9 50%, #ecfdf5 100%);
+  background-size: auto, auto, auto, 26px 26px, auto;
+  background-position: center, center, center, 0 0, center;
+}
+
+.lp-bg-pastel-peach {
+  background:
+    radial-gradient(circle at 10% 12%, rgba(254, 215, 170, 0.58), transparent 44%),
+    radial-gradient(circle at 90% 14%, rgba(254, 202, 202, 0.42), transparent 42%),
+    radial-gradient(circle at 22% 90%, rgba(253, 186, 116, 0.2), transparent 52%),
+    radial-gradient(rgba(15, 23, 42, 0.045) 1px, transparent 1px),
+    linear-gradient(180deg, #ffffff 0%, #fffaf5 48%, #fff1eb 100%);
+  background-size: auto, auto, auto, 26px 26px, auto;
+  background-position: center, center, center, 0 0, center;
+}
+
+.lp-bg-pastel-sky {
+  background:
+    radial-gradient(circle at 16% 10%, rgba(186, 230, 253, 0.58), transparent 46%),
+    radial-gradient(circle at 84% 18%, rgba(199, 210, 254, 0.4), transparent 44%),
+    radial-gradient(circle at 18% 88%, rgba(125, 211, 252, 0.26), transparent 50%),
+    radial-gradient(rgba(15, 23, 42, 0.045) 1px, transparent 1px),
+    linear-gradient(180deg, #ffffff 0%, #f5fbff 50%, #eef6ff 100%);
+  background-size: auto, auto, auto, 26px 26px, auto;
+  background-position: center, center, center, 0 0, center;
+}
+
+.lp-bg-pastel-lemon {
+  background:
+    radial-gradient(circle at 12% 16%, rgba(254, 249, 195, 0.62), transparent 44%),
+    radial-gradient(circle at 88% 14%, rgba(217, 249, 157, 0.45), transparent 42%),
+    radial-gradient(circle at 30% 86%, rgba(253, 224, 71, 0.22), transparent 52%),
+    radial-gradient(rgba(15, 23, 42, 0.045) 1px, transparent 1px),
+    linear-gradient(180deg, #ffffff 0%, #fffef6 48%, #fefce8 100%);
+  background-size: auto, auto, auto, 26px 26px, auto;
+  background-position: center, center, center, 0 0, center;
+}
+

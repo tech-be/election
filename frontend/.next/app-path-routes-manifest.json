@@ -1,0 +1,12 @@
+{
+  "/_not-found/page": "/_not-found",
+  "/[code]/page": "/[code]",
+  "/page": "/",
+  "/admin/campaigns/[code]/keytext/page": "/admin/campaigns/[code]/keytext",
+  "/admin/campaigns/page": "/admin/campaigns",
+  "/admin/tenants/[tenantId]/page": "/admin/tenants/[tenantId]",
+  "/admin/campaigns/new/page": "/admin/campaigns/new",
+  "/admin/login/page": "/admin/login",
+  "/admin/campaigns/[code]/edit/page": "/admin/campaigns/[code]/edit",
+  "/admin/tenants/page": "/admin/tenants"
+}

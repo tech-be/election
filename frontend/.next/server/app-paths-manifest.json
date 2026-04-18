@@ -1,0 +1,12 @@
+{
+  "/_not-found/page": "app/_not-found/page.js",
+  "/[code]/page": "app/[code]/page.js",
+  "/page": "app/page.js",
+  "/admin/campaigns/[code]/keytext/page": "app/admin/campaigns/[code]/keytext/page.js",
+  "/admin/campaigns/page": "app/admin/campaigns/page.js",
+  "/admin/tenants/[tenantId]/page": "app/admin/tenants/[tenantId]/page.js",
+  "/admin/campaigns/new/page": "app/admin/campaigns/new/page.js",
+  "/admin/login/page": "app/admin/login/page.js",
+  "/admin/campaigns/[code]/edit/page": "app/admin/campaigns/[code]/edit/page.js",
+  "/admin/tenants/page": "app/admin/tenants/page.js"
+}

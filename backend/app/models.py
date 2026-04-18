@@ -1,0 +1,105 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Optional
+
+from sqlalchemy import UniqueConstraint
+from sqlmodel import Field, SQLModel
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class Tenant(SQLModel, table=True):
+    __tablename__ = "tenants"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(max_length=200)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class User(SQLModel, table=True):
+    __tablename__ = "users"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    email: str = Field(index=True, max_length=254)
+    password_hash: str = Field(max_length=500)
+    role: str = Field(max_length=32)  # "sysadmin" | "tenant" | "user"
+    tenant_id: Optional[int] = Field(default=None, foreign_key="tenants.id", index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    __table_args__ = (UniqueConstraint("email", name="uq_users_email"),)
+
+
+class SessionToken(SQLModel, table=True):
+    __tablename__ = "session_tokens"
+
+    token: str = Field(primary_key=True, max_length=64)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    expires_at: Optional[datetime] = None
+
+
+class CampaignBase(SQLModel):
+    code: str = Field(index=True, max_length=64)
+    name: str = Field(max_length=200)
+    key_visual_url: Optional[str] = Field(default=None, max_length=500)
+    key_text: Optional[str] = None
+    products_json: str = Field(default="[]")
+    thank_you_message: Optional[str] = None
+    landing_url: Optional[str] = None
+    # ランディングURL未設定時、投票完了後の全画面終了メッセージ（未設定時はLP側デフォルト文言）
+    no_landing_end_message: Optional[str] = None
+    # LP背景クリエイティブ（パステル系プリセットのキー）
+    lp_background_key: str = Field(default="pastel_lavender", max_length=32)
+    # LP初回表示モーダル（説明）
+    lp_intro_title: Optional[str] = Field(default=None, max_length=200)
+    lp_intro_image_url: Optional[str] = Field(default=None, max_length=500)
+    lp_intro_text: Optional[str] = None
+    # LPで選ぶアイテム数（1〜10、アイテム数が少ない場合はその数まで）
+    vote_max_products: int = Field(default=3)
+
+
+class Campaign(CampaignBase, table=True):
+    __tablename__ = "campaigns"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenants.id", index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class CampaignCreate(CampaignBase):
+    """シスアドが企画を作るときは tenant_id を指定する（テナント配下ユーザはサーバ側で付与）。"""
+
+    tenant_id: Optional[int] = Field(default=None)
+
+
+class CampaignUpdate(SQLModel):
+    name: Optional[str] = Field(default=None, max_length=200)
+    key_visual_url: Optional[str] = Field(default=None, max_length=500)
+    key_text: Optional[str] = None
+    products_json: Optional[str] = None
+    thank_you_message: Optional[str] = None
+    landing_url: Optional[str] = None
+    no_landing_end_message: Optional[str] = None
+    lp_background_key: Optional[str] = Field(default=None, max_length=32)
+    lp_intro_title: Optional[str] = Field(default=None, max_length=200)
+    lp_intro_image_url: Optional[str] = Field(default=None, max_length=500)
+    lp_intro_text: Optional[str] = None
+    vote_max_products: Optional[int] = None
+
+
+class Vote(SQLModel, table=True):
+    __tablename__ = "votes"
+    __table_args__ = (UniqueConstraint("campaign_id", "email", name="uq_votes_campaign_email"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    campaign_id: int = Field(foreign_key="campaigns.id", index=True)
+    email: str = Field(max_length=254)
+    product_indices_json: str = Field(default="[]")
+    created_at: datetime = Field(default_factory=utcnow)
+
