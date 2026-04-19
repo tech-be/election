@@ -13,13 +13,18 @@ import { apiGet, apiPatch, type Campaign } from "../../../../../lib/api";
 import { LP_BACKGROUND_OPTIONS } from "../../../../../lib/lpBackgrounds";
 import { resolveMediaUrl } from "../../../../../lib/products";
 import { DEFAULT_NO_LANDING_END_MESSAGE } from "../../../../../lib/noLandingEndMessage";
+import {
+  DEFAULT_VOTE_CONFIRM_BODY_TEMPLATE,
+  DEFAULT_VOTE_CONFIRM_TITLE,
+} from "../../../../../lib/voteConfirmModal";
 import { clampVoteMaxProducts } from "../../../../../lib/voteSelection";
 
 const EDIT_TABS = [
   { id: "basic" as const, label: "基本情報" },
   { id: "intro" as const, label: "説明モーダル" },
-  { id: "landing" as const, label: "最終ランディング" },
   { id: "products" as const, label: "アイテム登録" },
+  { id: "confirm" as const, label: "確認モーダル" },
+  { id: "landing" as const, label: "最終ランディング" },
 ];
 
 export default function AdminCampaignEditPage() {
@@ -51,6 +56,8 @@ export default function AdminCampaignEditPage() {
   const [lpIntroImageUrl, setLpIntroImageUrl] = useState("");
   const [lpIntroText, setLpIntroText] = useState("");
   const [voteMaxProducts, setVoteMaxProducts] = useState(3);
+  const [voteConfirmTitle, setVoteConfirmTitle] = useState("");
+  const [voteConfirmBody, setVoteConfirmBody] = useState("");
 
   const [keyVisualUploading, setKeyVisualUploading] = useState(false);
   const [keyVisualInputNonce, setKeyVisualInputNonce] = useState(0);
@@ -97,6 +104,8 @@ export default function AdminCampaignEditPage() {
         setLpIntroImageUrl(c.lp_intro_image_url ?? "");
         setLpIntroText(c.lp_intro_text ?? "");
         setVoteMaxProducts(clampVoteMaxProducts(c.vote_max_products ?? 3));
+        setVoteConfirmTitle(c.vote_confirm_title ?? "");
+        setVoteConfirmBody(c.vote_confirm_body ?? "");
       } catch {
         setError("取得に失敗しました");
       } finally {
@@ -126,6 +135,8 @@ export default function AdminCampaignEditPage() {
             lp_intro_image_url: lpIntroImageUrl.trim() ? lpIntroImageUrl.trim() : null,
             lp_intro_text: lpIntroText.trim() ? lpIntroText.trim() : null,
             vote_max_products: voteMaxProducts,
+            vote_confirm_title: voteConfirmTitle.trim() ? voteConfirmTitle.trim() : null,
+            vote_confirm_body: voteConfirmBody.trim() ? voteConfirmBody.trim() : null,
           },
           {
             headers: {
@@ -159,6 +170,8 @@ export default function AdminCampaignEditPage() {
       lpIntroImageUrl,
       lpIntroText,
       voteMaxProducts,
+      voteConfirmTitle,
+      voteConfirmBody,
       router,
     ],
   );
@@ -412,6 +425,42 @@ export default function AdminCampaignEditPage() {
                   onChange={(e) => setLpIntroText(e.target.value)}
                   placeholder="投票の流れや注意事項など"
                 />
+              </label>
+            </div>
+          </div>
+        ) : editTab === "confirm" ? (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-slate-700/80 bg-slate-950/30 p-4">
+              <div className="text-sm font-medium text-slate-200">投票前の確認モーダル</div>
+              <p className="mt-1 text-xs text-slate-500">
+                「投票する」を押したあと、メールアドレス入力の前に表示される確認画面の文言です。
+              </p>
+              <label className="mt-4 block text-sm text-slate-200">
+                見出し
+                <input
+                  className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+                  value={voteConfirmTitle}
+                  onChange={(e) => setVoteConfirmTitle(e.target.value)}
+                  placeholder={DEFAULT_VOTE_CONFIRM_TITLE}
+                />
+                <p className="mt-1 text-xs text-slate-500">未入力のときは「{DEFAULT_VOTE_CONFIRM_TITLE}」を表示します。</p>
+              </label>
+              <label className="mt-4 block text-sm text-slate-200">
+                本文
+                <textarea
+                  className="mt-2 min-h-28 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-50 outline-none focus:border-indigo-400"
+                  value={voteConfirmBody}
+                  onChange={(e) => setVoteConfirmBody(e.target.value)}
+                  placeholder={DEFAULT_VOTE_CONFIRM_BODY_TEMPLATE}
+                  spellCheck={true}
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  選択必須件数は{" "}
+                  <code className="rounded bg-slate-800 px-1 py-0.5 font-mono text-[11px] text-slate-300">
+                    {"{need}"}
+                  </code>{" "}
+                  と書くと自動で置き換わります。未入力のときは既定の案内文を表示します。
+                </p>
               </label>
             </div>
           </div>

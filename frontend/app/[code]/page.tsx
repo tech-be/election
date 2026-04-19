@@ -93,6 +93,8 @@ export default async function CampaignLp({
           landingUrl={c.landing_url ?? null}
           voteMaxProducts={c.vote_max_products}
           noLandingEndMessage={c.no_landing_end_message}
+          voteConfirmTitle={c.vote_confirm_title ?? null}
+          voteConfirmBody={c.vote_confirm_body ?? null}
         />
       </section>
         </main>

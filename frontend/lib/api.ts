@@ -14,6 +14,8 @@ export type Campaign = {
   lp_intro_image_url?: string | null;
   lp_intro_text?: string | null;
   vote_max_products?: number;
+  vote_confirm_title?: string | null;
+  vote_confirm_body?: string | null;
   created_at: string;
   updated_at: string;
 };

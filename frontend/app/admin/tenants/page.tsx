@@ -45,7 +45,7 @@ export default function AdminTenantsPage() {
   }, [token]);
 
   return (
-    <main className="mx-auto max-w-2xl space-y-6">
+    <main className="w-full max-w-none space-y-6">
       <header className="space-y-2">
         <div className="text-xs text-slate-400">管理画面（シスアド）</div>
         <h1 className="text-2xl font-semibold tracking-tight">テナント管理</h1>

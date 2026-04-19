@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiPost } from "../../lib/api";
 import { resolveMediaUrl, type ProductDraft } from "../../lib/products";
 import { resolveNoLandingEndMessage } from "../../lib/noLandingEndMessage";
+import { resolveVoteConfirmBody, resolveVoteConfirmTitle } from "../../lib/voteConfirmModal";
 import { requiredVoteSelections } from "../../lib/voteSelection";
 
 type Props = {
@@ -16,6 +17,10 @@ type Props = {
   voteMaxProducts?: number;
   /** ランディングURL未設定時の終了メッセージ（DB未登録時は resolve でデフォルト） */
   noLandingEndMessage?: string | null;
+  /** 投票前確認モーダルの見出し（未設定時は既定文言） */
+  voteConfirmTitle?: string | null;
+  /** 投票前確認モーダルの本文（`{need}` で選択件数に置換、未設定時は既定文言） */
+  voteConfirmBody?: string | null;
 };
 
 function isValidEmail(raw: string): boolean {
@@ -56,6 +61,8 @@ export function CampaignVoteSection({
   landingUrl,
   voteMaxProducts,
   noLandingEndMessage,
+  voteConfirmTitle,
+  voteConfirmBody,
 }: Props) {
   const need = useMemo(
     () => requiredVoteSelections(voteMaxProducts ?? 3, products.length),
@@ -365,10 +372,10 @@ export function CampaignVoteSection({
             ) : (
               <>
                 <h2 id="vote-confirm-title" className="text-lg font-semibold text-slate-900">
-                  これで良いですか？
+                  {resolveVoteConfirmTitle(voteConfirmTitle)}
                 </h2>
-                <p className="mt-2 text-sm text-slate-600">
-                  選択した{need}件のアイテムを確認し、メールアドレスを入力のうえ投票してください。
+                <p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">
+                  {resolveVoteConfirmBody(voteConfirmBody, need)}
                 </p>
 
                 <ul className="mt-5 space-y-3">

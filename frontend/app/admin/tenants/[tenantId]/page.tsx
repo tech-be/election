@@ -93,7 +93,7 @@ export default function AdminTenantUsersPage() {
   }, [token, tenantId]);
 
   return (
-    <main className="mx-auto max-w-2xl space-y-6">
+    <main className="w-full max-w-none space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-1">
           <div className="text-xs text-slate-400">

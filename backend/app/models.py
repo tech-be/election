@@ -61,6 +61,9 @@ class CampaignBase(SQLModel):
     lp_intro_text: Optional[str] = None
     # LPで選ぶアイテム数（1〜10、アイテム数が少ない場合はその数まで）
     vote_max_products: int = Field(default=3)
+    # 投票前の確認モーダル文言（未設定時はLP側デフォルト）
+    vote_confirm_title: Optional[str] = Field(default=None, max_length=200)
+    vote_confirm_body: Optional[str] = None
 
 
 class Campaign(CampaignBase, table=True):
@@ -91,6 +94,8 @@ class CampaignUpdate(SQLModel):
     lp_intro_image_url: Optional[str] = Field(default=None, max_length=500)
     lp_intro_text: Optional[str] = None
     vote_max_products: Optional[int] = None
+    vote_confirm_title: Optional[str] = Field(default=None, max_length=200)
+    vote_confirm_body: Optional[str] = None
 
 
 class Vote(SQLModel, table=True):
