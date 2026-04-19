@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { notFound } from "next/navigation";
 
 import { CampaignVoteSection } from "../../components/lp/CampaignVoteSection";
 import { LpIntroModal } from "../../components/lp/LpIntroModal";
@@ -9,12 +10,22 @@ import { apiGet, type Campaign } from "../../lib/api";
 import { parseProductsJson, resolveMediaUrl } from "../../lib/products";
 import { requiredVoteSelections } from "../../lib/voteSelection";
 
+/** ブラウザが /favicon.ico 等を取りに来たときに [code] に誤マッチしないよう除外 */
+const RESERVED_CAMPAIGN_CODES = new Set(
+  ["favicon.ico", "robots.txt", "sitemap.xml", "manifest.webmanifest", "site.webmanifest"].map((s) =>
+    s.toLowerCase(),
+  ),
+);
+
 export default async function CampaignLp({
   params,
 }: {
   params: Promise<{ code: string }>;
 }) {
   const { code } = await params;
+  if (RESERVED_CAMPAIGN_CODES.has(code.toLowerCase())) {
+    notFound();
+  }
   const c = await apiGet<Campaign>(`/campaigns/${encodeURIComponent(code)}`);
 
   const products = parseProductsJson(c.products_json);
