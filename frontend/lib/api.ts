@@ -46,7 +46,8 @@ function baseUrl(): string {
 /** Backend API のパスプレフィックス（`/uploads` など静的配信は含まない） */
 const API_PREFIX = "/api";
 
-function apiUrl(path: string): string {
+/** API の絶対URL（JSON 以外のレスポンス取得・ダウンロード用） */
+export function apiUrl(path: string): string {
   const p = path.startsWith("/") ? path : `/${path}`;
   return `${baseUrl()}${API_PREFIX}${p}`;
 }

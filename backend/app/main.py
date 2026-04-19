@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import os
 import re
@@ -10,7 +12,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -418,6 +420,34 @@ def campaign_vote_results(
     if user.role in ("tenant", "user") and row.tenant_id != user.tenant_id:
         raise HTTPException(status_code=403, detail="forbidden")
     return _campaign_vote_results_payload(row, session)
+
+
+@api_router.get("/admin/campaigns/{code}/vote-emails", dependencies=[Depends(require_campaign_manager)])
+def export_campaign_vote_emails_csv(
+    code: str,
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(require_campaign_manager)],
+):
+    """投票時に登録されたメールアドレスを CSV でダウンロード（1行1投票）。"""
+    row = session.exec(select(Campaign).where(Campaign.code == code)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    if user.role in ("tenant", "user") and row.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    votes = session.exec(select(Vote).where(Vote.campaign_id == row.id).order_by(Vote.created_at.asc())).all()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["email", "voted_at"])
+    for v in votes:
+        writer.writerow([v.email, v.created_at.isoformat()])
+    body = "\ufeff" + buf.getvalue()
+    safe_code = re.sub(r"[^a-zA-Z0-9._-]+", "_", code) or "campaign"
+    return Response(
+        content=body.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{safe_code}-vote-emails.csv"'},
+    )
 
 
 @api_router.get("/campaigns/{code}")

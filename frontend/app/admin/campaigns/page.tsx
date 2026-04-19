@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { apiDelete, apiGet, type Campaign, type CampaignVoteResults } from "../../../lib/api";
+import { apiDelete, apiGet, apiUrl, type Campaign, type CampaignVoteResults } from "../../../lib/api";
 import { resolveMediaUrl } from "../../../lib/products";
 
 type TenantRow = { id: number; name: string };
@@ -21,6 +21,7 @@ export default function AdminCampaignsPage() {
   const [resultsLoading, setResultsLoading] = useState(false);
   const [resultsData, setResultsData] = useState<CampaignVoteResults | null>(null);
   const [resultsError, setResultsError] = useState<string | null>(null);
+  const [downloadingEmailsCode, setDownloadingEmailsCode] = useState<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -131,6 +132,41 @@ export default function AdminCampaignsPage() {
                   >
                     編集
                   </Link>
+                  <button
+                    type="button"
+                    className="text-sm text-sky-300 underline hover:text-sky-200 disabled:opacity-50"
+                    disabled={!token || !!downloadingEmailsCode}
+                    onClick={() => {
+                      if (!token) return;
+                      setDownloadingEmailsCode(r.code);
+                      setError(null);
+                      void (async () => {
+                        try {
+                          const res = await fetch(
+                            apiUrl(`/admin/campaigns/${encodeURIComponent(r.code)}/vote-emails`),
+                            { headers: { Authorization: `Bearer ${token}` } },
+                          );
+                          if (!res.ok) throw new Error(await res.text());
+                          const blob = await res.blob();
+                          const href = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = href;
+                          a.download = `${r.code}-vote-emails.csv`;
+                          a.rel = "noopener";
+                          document.body.appendChild(a);
+                          a.click();
+                          a.remove();
+                          URL.revokeObjectURL(href);
+                        } catch {
+                          setError("メールアドレス一覧のダウンロードに失敗しました");
+                        } finally {
+                          setDownloadingEmailsCode(null);
+                        }
+                      })();
+                    }}
+                  >
+                    {downloadingEmailsCode === r.code ? "取得中…" : "メールCSV"}
+                  </button>
                   <button
                     type="button"
                     className="text-sm text-emerald-300 underline hover:text-emerald-200 disabled:opacity-50"
