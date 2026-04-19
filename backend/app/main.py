@@ -354,6 +354,72 @@ def list_admin_campaigns(
     return session.exec(q).all()
 
 
+def _campaign_vote_results_payload(row: Campaign, session: Session) -> dict:
+    try:
+        products = json.loads(row.products_json or "[]")
+    except Exception:
+        products = []
+    if not isinstance(products, list):
+        products = []
+
+    counts: dict[int, int] = {i: 0 for i in range(len(products))}
+    votes = session.exec(select(Vote).where(Vote.campaign_id == row.id)).all()
+    for v in votes:
+        try:
+            idxs = json.loads(v.product_indices_json or "[]")
+        except Exception:
+            continue
+        if not isinstance(idxs, list):
+            continue
+        for raw in idxs:
+            if isinstance(raw, int) and raw in counts:
+                counts[raw] += 1
+
+    items: list[dict] = []
+    for idx in range(len(products)):
+        p = products[idx]
+        name = f"アイテム {idx + 1}"
+        img: str | None = None
+        if isinstance(p, dict):
+            name = str(p.get("name", "") or "").strip() or name
+            for k in ("image1Url", "image2Url", "image3Url"):
+                v = p.get(k)
+                if v and str(v).strip():
+                    img = str(v).strip()
+                    break
+        elif isinstance(p, str) and p.strip():
+            name = p.strip()
+        items.append(
+            {
+                "index": idx,
+                "vote_count": counts.get(idx, 0),
+                "name": name,
+                "image_url": img,
+            }
+        )
+    items.sort(key=lambda x: (-x["vote_count"], x["index"]))
+    return {
+        "campaign_code": row.code,
+        "campaign_name": row.name,
+        "total_ballots": len(votes),
+        "items": items,
+    }
+
+
+@api_router.get("/admin/campaigns/{code}/vote-results", dependencies=[Depends(require_campaign_manager)])
+def campaign_vote_results(
+    code: str,
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(require_campaign_manager)],
+):
+    row = session.exec(select(Campaign).where(Campaign.code == code)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    if user.role in ("tenant", "user") and row.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return _campaign_vote_results_payload(row, session)
+
+
 @api_router.get("/campaigns/{code}")
 def get_campaign(
     code: str,

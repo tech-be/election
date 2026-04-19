@@ -20,6 +20,20 @@ export type Campaign = {
   updated_at: string;
 };
 
+export type CampaignVoteResultItem = {
+  index: number;
+  vote_count: number;
+  name: string;
+  image_url: string | null;
+};
+
+export type CampaignVoteResults = {
+  campaign_code: string;
+  campaign_name: string;
+  total_ballots: number;
+  items: CampaignVoteResultItem[];
+};
+
 function baseUrl(): string {
   // Server-side (Node in container) must use docker network.
   if (typeof window === "undefined") {
