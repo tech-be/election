@@ -45,7 +45,7 @@ docker compose up --build -d
 4. 初回や `--build` 時はイメージ取得・ビルドに数分かかることがあります。完了を待つ。
 5. 動作確認する  
    - ブラウザ: フロント [http://localhost:3001](http://localhost:3001)  
-   - または API ヘルス: `curl -s http://localhost:8001/health`（応答があれば OK）
+   - または API ヘルス: `curl -s http://localhost:8001/api/health`（応答があれば OK）
 
 ### よく使うコマンド
 
@@ -59,7 +59,7 @@ docker compose up --build -d
 ### URL（ポート）
 
 - フロント: `http://localhost:3001`
-- API: `http://localhost:8001`（疎通例: `/health`）
+- API: `http://localhost:8001`（疎通例: `/api/health`）
 - DB: Compose 内のみ（ホストからはポート公開しません）
 
 API のベース URL は `.env_sample` / `.env` を参照してください。その他の環境変数やパスワードは `docker-compose.yml` を参照してください。

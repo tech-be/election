@@ -65,7 +65,7 @@ export default function AdminCampaignEditPage() {
       const base = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch(`${base}/admin/uploads`, {
+      const res = await fetch(`${base}/api/admin/uploads`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,

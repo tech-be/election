@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -68,13 +68,15 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 # Host from docker-compose uses 8001->8000, so links like http://localhost:8001/uploads/...
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
+api_router = APIRouter(prefix="/api")
 
-@app.get("/health")
+
+@api_router.get("/health")
 def health():
     return {"ok": True}
 
 
-@app.post("/admin/login")
+@api_router.post("/admin/login")
 def admin_login(
     payload: dict,
     session: Annotated[Session, Depends(get_session)],
@@ -127,12 +129,12 @@ def verify_password(password: str, stored: str) -> bool:
     return secrets.compare_digest(got, expected)
 
 
-@app.get("/auth/me")
+@api_router.get("/auth/me")
 def auth_me(user: Annotated[User, Depends(get_current_user)]):
     return {"id": user.id, "email": user.email, "role": user.role, "tenant_id": user.tenant_id}
 
 
-@app.post("/admin/bootstrap", dependencies=[Depends(require_sysadmin)])
+@api_router.post("/admin/bootstrap", dependencies=[Depends(require_sysadmin)])
 def bootstrap_sysadmin(
     payload: dict,
     session: Annotated[Session, Depends(get_session)],
@@ -155,12 +157,12 @@ def bootstrap_sysadmin(
     return row
 
 
-@app.get("/admin/tenants", dependencies=[Depends(require_sysadmin)])
+@api_router.get("/admin/tenants", dependencies=[Depends(require_sysadmin)])
 def list_tenants(session: Annotated[Session, Depends(get_session)]):
     return session.exec(select(Tenant).order_by(Tenant.created_at.desc())).all()
 
 
-@app.post("/admin/tenants", dependencies=[Depends(require_sysadmin)])
+@api_router.post("/admin/tenants", dependencies=[Depends(require_sysadmin)])
 def create_tenant(payload: dict, session: Annotated[Session, Depends(get_session)]):
     name = str(payload.get("name", "")).strip()
     if not name:
@@ -173,7 +175,7 @@ def create_tenant(payload: dict, session: Annotated[Session, Depends(get_session
     return row
 
 
-@app.get("/admin/tenants/{tenant_id}/users")
+@api_router.get("/admin/tenants/{tenant_id}/users")
 def list_tenant_users(
     tenant_id: int,
     session: Annotated[Session, Depends(get_session)],
@@ -183,7 +185,7 @@ def list_tenant_users(
     return session.exec(select(User).where(User.tenant_id == tenant_id).order_by(User.created_at.desc())).all()
 
 
-@app.post("/admin/tenants/{tenant_id}/admins")
+@api_router.post("/admin/tenants/{tenant_id}/admins")
 def create_tenant_admin(
     tenant_id: int,
     payload: dict,
@@ -206,7 +208,7 @@ def create_tenant_admin(
     return row
 
 
-@app.post("/admin/tenants/{tenant_id}/users")
+@api_router.post("/admin/tenants/{tenant_id}/users")
 def create_tenant_user(
     tenant_id: int,
     payload: dict,
@@ -229,7 +231,7 @@ def create_tenant_user(
     return row
 
 
-@app.patch("/admin/tenants/{tenant_id}/users/{user_id}")
+@api_router.patch("/admin/tenants/{tenant_id}/users/{user_id}")
 def update_tenant_user(
     tenant_id: int,
     user_id: int,
@@ -269,7 +271,7 @@ def update_tenant_user(
     return row
 
 
-@app.delete("/admin/tenants/{tenant_id}/users/{user_id}")
+@api_router.delete("/admin/tenants/{tenant_id}/users/{user_id}")
 def delete_tenant_user(
     tenant_id: int,
     user_id: int,
@@ -295,7 +297,7 @@ def _sanitize_filename(name: str) -> str:
     return name or "file"
 
 
-@app.post("/admin/uploads", dependencies=[Depends(require_campaign_manager)])
+@api_router.post("/admin/uploads", dependencies=[Depends(require_campaign_manager)])
 async def admin_upload(file: UploadFile):
     if not file.filename:
         raise HTTPException(status_code=400, detail="missing filename")
@@ -331,15 +333,15 @@ async def admin_upload(file: UploadFile):
     )
 
 
-@app.get("/campaigns")
+@api_router.get("/campaigns")
 def list_campaigns(
     _session: Annotated[Session, Depends(get_session)],
 ):
-    # 一覧はテナント境界のある GET /admin/campaigns を利用してください（公開LPは /campaigns/{code} のみ）。
+    # 一覧はテナント境界のある GET /api/admin/campaigns を利用してください（公開LPは /api/campaigns/{code} のみ）。
     return []
 
 
-@app.get("/admin/campaigns", dependencies=[Depends(require_campaign_manager)])
+@api_router.get("/admin/campaigns", dependencies=[Depends(require_campaign_manager)])
 def list_admin_campaigns(
     session: Annotated[Session, Depends(get_session)],
     user: Annotated[User, Depends(require_campaign_manager)],
@@ -352,7 +354,7 @@ def list_admin_campaigns(
     return session.exec(q).all()
 
 
-@app.get("/campaigns/{code}")
+@api_router.get("/campaigns/{code}")
 def get_campaign(
     code: str,
     session: Annotated[Session, Depends(get_session)],
@@ -371,7 +373,7 @@ class VoteSubmitBody(BaseModel):
     product_indices: list[int] = Field(min_length=1, max_length=10)
 
 
-@app.post("/campaigns/{code}/votes")
+@api_router.post("/campaigns/{code}/votes")
 def submit_vote(
     code: str,
     body: VoteSubmitBody,
@@ -424,7 +426,7 @@ def submit_vote(
     }
 
 
-@app.post("/admin/campaigns", dependencies=[Depends(require_campaign_manager)])
+@api_router.post("/admin/campaigns", dependencies=[Depends(require_campaign_manager)])
 def create_campaign(
     payload: CampaignCreate,
     session: Annotated[Session, Depends(get_session)],
@@ -464,7 +466,7 @@ def create_campaign(
     return row
 
 
-@app.patch("/admin/campaigns/{code}", dependencies=[Depends(require_campaign_manager)])
+@api_router.patch("/admin/campaigns/{code}", dependencies=[Depends(require_campaign_manager)])
 def update_campaign(
     code: str,
     payload: CampaignUpdate,
@@ -497,7 +499,7 @@ def update_campaign(
     return row
 
 
-@app.delete("/admin/campaigns/{code}", dependencies=[Depends(require_campaign_manager)])
+@api_router.delete("/admin/campaigns/{code}", dependencies=[Depends(require_campaign_manager)])
 def delete_campaign(
     code: str,
     session: Annotated[Session, Depends(get_session)],
@@ -516,7 +518,7 @@ def delete_campaign(
     return {"ok": True}
 
 
-@app.delete("/admin/campaigns/{code}/products/{index}", dependencies=[Depends(require_campaign_manager)])
+@api_router.delete("/admin/campaigns/{code}/products/{index}", dependencies=[Depends(require_campaign_manager)])
 def delete_campaign_product(
     code: str,
     index: int,
@@ -544,3 +546,6 @@ def delete_campaign_product(
     session.commit()
     session.refresh(row)
     return row
+
+
+app.include_router(api_router)

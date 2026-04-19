@@ -27,8 +27,16 @@ function baseUrl(): string {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
 }
 
+/** Backend API のパスプレフィックス（`/uploads` など静的配信は含まない） */
+const API_PREFIX = "/api";
+
+function apiUrl(path: string): string {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${baseUrl()}${API_PREFIX}${p}`;
+}
+
 export async function apiGet<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${baseUrl()}${path}`, {
+  const res = await fetch(apiUrl(path), {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -45,7 +53,7 @@ export async function apiPost<T>(
   body: unknown,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(`${baseUrl()}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     ...init,
     headers: {
@@ -63,7 +71,7 @@ export async function apiPatch<T>(
   body: unknown,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(`${baseUrl()}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "PATCH",
     ...init,
     headers: {
@@ -77,7 +85,7 @@ export async function apiPatch<T>(
 }
 
 export async function apiDelete<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${baseUrl()}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "DELETE",
     ...init,
     headers: {
