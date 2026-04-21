@@ -12,9 +12,14 @@ import { requiredVoteSelections } from "../../lib/voteSelection";
 
 /** ブラウザが /favicon.ico 等を取りに来たときに [code] に誤マッチしないよう除外 */
 const RESERVED_CAMPAIGN_CODES = new Set(
-  ["favicon.ico", "robots.txt", "sitemap.xml", "manifest.webmanifest", "site.webmanifest"].map((s) =>
-    s.toLowerCase(),
-  ),
+  [
+    "favicon.ico",
+    "robots.txt",
+    "sitemap.xml",
+    "manifest.webmanifest",
+    "site.webmanifest",
+    "coupon",
+  ].map((s) => s.toLowerCase()),
 );
 
 export default async function CampaignLp({

@@ -3,7 +3,7 @@
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { apiDelete, apiGet, apiPatch, apiPost } from "../../../../lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost, type Tenant } from "../../../../lib/api";
 
 type UserRow = {
   id: number;
@@ -21,6 +21,7 @@ export default function AdminTenantUsersPage() {
 
   const [token, setToken] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [tenantName, setTenantName] = useState<string | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -80,11 +81,18 @@ export default function AdminTenantUsersPage() {
       setLoading(true);
       setError(null);
       try {
-        const rows = await apiGet<UserRow[]>(`/admin/tenants/${tenantId}/users`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const [tenantRes, rows] = await Promise.all([
+          apiGet<Tenant>(`/admin/tenants/${tenantId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          apiGet<UserRow[]>(`/admin/tenants/${tenantId}/users`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
+        setTenantName(tenantRes.name ?? null);
         setUsers(rows);
       } catch {
+        setTenantName(null);
         setError("取得に失敗しました（権限不足の可能性）");
       } finally {
         setLoading(false);
@@ -95,12 +103,23 @@ export default function AdminTenantUsersPage() {
   return (
     <main className="w-full max-w-none space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
-        <div className="space-y-1">
+        <div className="space-y-3">
           <div className="text-xs text-slate-400">
             {viewerRole === "tenant" ? "管理画面（テナント権限）" : "管理画面（シスアド）"}
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">テナント配下ユーザ</h1>
-          <div className="text-xs text-slate-500">Tenant ID: {tenantId}</div>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-100">テナント配下ユーザ</h1>
+          <p className="text-base font-medium leading-snug text-slate-200 sm:text-lg">
+            <span className="text-slate-400">テナント</span>{" "}
+            <span className="font-mono font-semibold tabular-nums text-indigo-200">#{tenantId}</span>
+            {tenantName ? (
+              <>
+                <span className="mx-2 text-slate-500">—</span>
+                <span className="font-semibold text-slate-100">{tenantName}</span>
+              </>
+            ) : loading ? (
+              <span className="ml-2 text-sm font-normal text-slate-500">（読み込み中…）</span>
+            ) : null}
+          </p>
         </div>
         <button
           type="button"

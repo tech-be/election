@@ -3,14 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { apiGet, apiPost } from "../../../lib/api";
-
-type Tenant = {
-  id: number;
-  name: string;
-  created_at: string;
-  updated_at: string;
-};
+import { apiGet, apiPatch, apiPost, type Tenant } from "../../../lib/api";
 
 export default function AdminTenantsPage() {
   const [token, setToken] = useState<string | null>(null);
@@ -20,6 +13,7 @@ export default function AdminTenantsPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [updatingCouponsId, setUpdatingCouponsId] = useState<number | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -46,11 +40,6 @@ export default function AdminTenantsPage() {
 
   return (
     <main className="w-full max-w-none space-y-6">
-      <header className="space-y-2">
-        <div className="text-xs text-slate-400">管理画面（シスアド）</div>
-        <h1 className="text-2xl font-semibold tracking-tight">テナント管理</h1>
-      </header>
-
       {mounted && !token ? (
         <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
           ログイン情報がありません。先にログインしてください。
@@ -113,17 +102,60 @@ export default function AdminTenantsPage() {
         ) : (
           <ul className="divide-y divide-slate-800">
             {tenants.map((t) => (
-              <li key={t.id} className="flex items-center justify-between gap-3 py-3">
+              <li key={t.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
                   <div className="truncate font-medium text-slate-100">{t.name}</div>
                   <div className="text-xs text-slate-500">ID: {t.id}</div>
                 </div>
-                <Link
-                  className="shrink-0 rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-900"
-                  href={`/admin/tenants/${t.id}`}
-                >
-                  ユーザ管理
-                </Link>
+                <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
+                    <span className="whitespace-nowrap text-slate-400">クーポン機能</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={t.coupons_enabled}
+                      disabled={!token || updatingCouponsId === t.id}
+                      className={`relative h-7 w-12 shrink-0 rounded-full transition ${
+                        t.coupons_enabled ? "bg-emerald-600" : "bg-slate-600"
+                      } disabled:opacity-50`}
+                      onClick={() => {
+                        if (!token || updatingCouponsId !== null) return;
+                        const next = !t.coupons_enabled;
+                        setUpdatingCouponsId(t.id);
+                        setError(null);
+                        void (async () => {
+                          try {
+                            const updated = await apiPatch<Tenant>(
+                              `/admin/tenants/${t.id}`,
+                              { coupons_enabled: next },
+                              { headers: { Authorization: `Bearer ${token}` } },
+                            );
+                            setTenants((prev) => prev.map((x) => (x.id === t.id ? updated : x)));
+                          } catch {
+                            setError("クーポン設定の更新に失敗しました");
+                          } finally {
+                            setUpdatingCouponsId(null);
+                          }
+                        })();
+                      }}
+                    >
+                      <span
+                        className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition ${
+                          t.coupons_enabled ? "left-5" : "left-0.5"
+                        }`}
+                      />
+                    </button>
+                    <span className="text-xs text-slate-500">
+                      {updatingCouponsId === t.id ? "更新中…" : t.coupons_enabled ? "利用可" : "オフ"}
+                    </span>
+                  </label>
+                  <Link
+                    className="shrink-0 rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-900"
+                    href={`/admin/tenants/${t.id}`}
+                  >
+                    ユーザ管理
+                  </Link>
+                </div>
               </li>
             ))}
           </ul>
@@ -132,4 +164,3 @@ export default function AdminTenantsPage() {
     </main>
   );
 }
-

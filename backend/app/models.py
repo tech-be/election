@@ -16,6 +16,8 @@ class Tenant(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(max_length=200)
+    # シスアドがテナント単位でクーポン機能の利用を許可するか（無効時は当該テナント向け管理API・投票時の発行を停止）。既定は OFF。
+    coupons_enabled: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -106,5 +108,50 @@ class Vote(SQLModel, table=True):
     campaign_id: int = Field(foreign_key="campaigns.id", index=True)
     email: str = Field(max_length=254)
     product_indices_json: str = Field(default="[]")
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class Coupon(SQLModel, table=True):
+    __tablename__ = "coupons"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tenant_id: int = Field(foreign_key="tenants.id", index=True)
+    # 任意。設定時は同一テナントの企画に紐づく
+    campaign_id: Optional[int] = Field(default=None, foreign_key="campaigns.id", index=True)
+    name: str = Field(max_length=200)
+    image_url: Optional[str] = Field(default=None, max_length=500)
+    description: Optional[str] = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class CouponCreate(SQLModel):
+    name: str = Field(max_length=200)
+    image_url: Optional[str] = Field(default=None, max_length=500)
+    description: Optional[str] = None
+    tenant_id: Optional[int] = None
+    campaign_id: Optional[int] = None
+
+
+class CouponUpdate(SQLModel):
+    name: Optional[str] = Field(default=None, max_length=200)
+    image_url: Optional[str] = Field(default=None, max_length=500)
+    description: Optional[str] = None
+    tenant_id: Optional[int] = None
+    campaign_id: Optional[int] = None
+
+
+class CouponIssue(SQLModel, table=True):
+    """投票に紐づくクーポン発行（URL トークンで個人の LP を開く）。"""
+
+    __tablename__ = "coupon_issues"
+    __table_args__ = (UniqueConstraint("vote_id", "coupon_id", name="uq_coupon_issues_vote_coupon"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    coupon_id: int = Field(foreign_key="coupons.id", index=True)
+    vote_id: int = Field(foreign_key="votes.id", index=True)
+    token: str = Field(max_length=64, unique=True, index=True)
+    email: str = Field(max_length=254)
+    used_at: Optional[datetime] = Field(default=None)
     created_at: datetime = Field(default_factory=utcnow)
 
