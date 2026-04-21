@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
+import { apiGet, type AuthMe } from "../../lib/api";
+
 type AdminRole = "sysadmin" | "tenant" | "user" | "";
 
 function roleLabel(role: AdminRole) {
@@ -25,10 +27,11 @@ function NavItem({
   return (
     <Link
       href={href}
+      aria-current={active ? "page" : undefined}
       className={[
-        "block rounded-xl border px-3 py-2 text-sm transition",
+        "block rounded-xl border px-3 py-2 text-sm font-medium transition",
         active
-          ? "border-indigo-400/60 bg-indigo-500/10 text-indigo-100"
+          ? "border-indigo-400/80 bg-indigo-500/20 text-white shadow-[inset_3px_0_0_0_rgb(129,140,250)] ring-1 ring-indigo-400/30"
           : "border-slate-800 bg-slate-950/40 text-slate-200 hover:border-slate-700 hover:bg-slate-950/70",
       ].join(" ")}
     >
@@ -45,6 +48,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [role, setRole] = useState<AdminRole>("");
   const [tenantScopeId, setTenantScopeId] = useState<number | null>(null);
+  /** テナント／ユーザ権限時のみ。クーポン機能が有効か（シスアドは未使用） */
+  const [tenantCouponsEnabled, setTenantCouponsEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -64,6 +69,25 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     setTenantScopeId(Number.isFinite(tid) ? tid : null);
   }, [pathname]);
 
+  useEffect(() => {
+    const t = localStorage.getItem("admin_token");
+    const raw = (localStorage.getItem("admin_role") ?? "").trim().toLowerCase();
+    if (!t || raw === "sysadmin" || raw === "") {
+      setTenantCouponsEnabled(null);
+      return;
+    }
+    void (async () => {
+      try {
+        const me = await apiGet<AuthMe>("/auth/me", {
+          headers: { Authorization: `Bearer ${t}` },
+        });
+        setTenantCouponsEnabled(me.tenant_coupons_enabled ?? false);
+      } catch {
+        setTenantCouponsEnabled(false);
+      }
+    })();
+  }, [pathname, token]);
+
   const nav = useMemo(() => {
     const items: Array<{ href: string; label: string }> = [];
     // テナント管理はシスアドのみ（ユーザ権限・テナント権限では出さない）
@@ -74,8 +98,13 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       items.push({ href: `/admin/tenants/${tenantScopeId}`, label: "ユーザー管理" });
     }
     items.push({ href: "/admin/campaigns", label: "企画管理" });
+    if (role === "sysadmin") {
+      items.push({ href: "/admin/coupons", label: "クーポン管理" });
+    } else if ((role === "tenant" || role === "user") && tenantCouponsEnabled === true) {
+      items.push({ href: "/admin/coupons", label: "クーポン管理" });
+    }
     return items;
-  }, [role, tenantScopeId]);
+  }, [role, tenantScopeId, tenantCouponsEnabled]);
 
   const isLogin = pathname === "/admin/login";
   if (isLogin) return <>{children}</>;

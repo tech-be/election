@@ -20,7 +20,19 @@ from sqlmodel import Session, select
 
 from app.auth import get_current_user, require_campaign_manager, require_sysadmin
 from app.db import get_session
-from app.models import Campaign, CampaignCreate, CampaignUpdate, SessionToken, Tenant, User, Vote
+from app.models import (
+    Campaign,
+    CampaignCreate,
+    CampaignUpdate,
+    Coupon,
+    CouponCreate,
+    CouponIssue,
+    CouponUpdate,
+    SessionToken,
+    Tenant,
+    User,
+    Vote,
+)
 
 LP_BACKGROUND_KEYS = frozenset(
     ("pastel_lavender", "pastel_mint", "pastel_peach", "pastel_sky", "pastel_lemon"),
@@ -47,9 +59,41 @@ def _clamp_vote_max_products(raw: int | None) -> int:
 def _assert_sysadmin_or_tenant_of_tenant(user: User, tenant_id: int) -> None:
     if user.role == "sysadmin":
         return
-    if user.role == "tenant" and user.tenant_id is not None and user.tenant_id == tenant_id:
+    if user.role in ("tenant", "user") and user.tenant_id is not None and user.tenant_id == tenant_id:
         return
     raise HTTPException(status_code=403, detail="forbidden")
+
+
+def _assert_coupon_access(row: Coupon, user: User) -> None:
+    if user.role == "sysadmin":
+        return
+    if user.role in ("tenant", "user") and user.tenant_id is not None and user.tenant_id == row.tenant_id:
+        return
+    raise HTTPException(status_code=403, detail="forbidden")
+
+
+def _assert_tenant_coupons_feature(session: Session, tenant_id: int, user: User) -> None:
+    """テナント配下ユーザ・ユーザ権限は、当該テナントでクーポンが無効ならクーポン API を利用不可。シスアドは常に可。"""
+    if user.role == "sysadmin":
+        return
+    t = session.get(Tenant, tenant_id)
+    if not t or not t.coupons_enabled:
+        raise HTTPException(status_code=403, detail="coupons disabled for tenant")
+
+
+def _validate_coupon_campaign_link(
+    session: Session,
+    tenant_id: int,
+    campaign_id: int | None,
+) -> int | None:
+    if campaign_id is None:
+        return None
+    c = session.get(Campaign, int(campaign_id))
+    if not c:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    if c.tenant_id != tenant_id:
+        raise HTTPException(status_code=400, detail="campaign tenant mismatch")
+    return int(campaign_id)
 
 
 app = FastAPI(title="funsite backend", version="0.1.0")
@@ -132,8 +176,17 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 @api_router.get("/auth/me")
-def auth_me(user: Annotated[User, Depends(get_current_user)]):
-    return {"id": user.id, "email": user.email, "role": user.role, "tenant_id": user.tenant_id}
+def auth_me(
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[Session, Depends(get_session)],
+):
+    out: dict = {"id": user.id, "email": user.email, "role": user.role, "tenant_id": user.tenant_id}
+    if user.role in ("tenant", "user") and user.tenant_id is not None:
+        tr = session.get(Tenant, user.tenant_id)
+        out["tenant_coupons_enabled"] = bool(tr.coupons_enabled) if tr else False
+    else:
+        out["tenant_coupons_enabled"] = None
+    return out
 
 
 @api_router.post("/admin/bootstrap", dependencies=[Depends(require_sysadmin)])
@@ -170,10 +223,43 @@ def create_tenant(payload: dict, session: Annotated[Session, Depends(get_session
     if not name:
         raise HTTPException(status_code=400, detail="name required")
     now = datetime.now(timezone.utc)
-    row = Tenant(name=name, created_at=now, updated_at=now)
+    row = Tenant(name=name, coupons_enabled=False, created_at=now, updated_at=now)
     session.add(row)
     session.commit()
     session.refresh(row)
+    return row
+
+
+@api_router.patch("/admin/tenants/{tenant_id}", dependencies=[Depends(require_sysadmin)])
+def patch_tenant(
+    tenant_id: int,
+    payload: dict,
+    session: Annotated[Session, Depends(get_session)],
+):
+    """テナント設定の更新（現状は coupons_enabled のみ）。"""
+    row = session.get(Tenant, tenant_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    now = datetime.now(timezone.utc)
+    if "coupons_enabled" in payload:
+        row.coupons_enabled = bool(payload["coupons_enabled"])
+    row.updated_at = now
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+@api_router.get("/admin/tenants/{tenant_id}")
+def get_tenant(
+    tenant_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(get_current_user)],
+):
+    _assert_sysadmin_or_tenant_of_tenant(user, tenant_id)
+    row = session.get(Tenant, tenant_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="tenant not found")
     return row
 
 
@@ -510,6 +596,28 @@ def submit_vote(
         product_indices_json=json.dumps(idxs, ensure_ascii=False),
     )
     session.add(vote)
+    session.flush()
+
+    tenant_row = session.get(Tenant, row.tenant_id)
+    if tenant_row and not tenant_row.coupons_enabled:
+        coupons_linked = []
+    else:
+        coupons_linked = session.exec(
+            select(Coupon).where(Coupon.campaign_id == row.id).order_by(Coupon.id)
+        ).all()
+    coupon_tokens: list[str] = []
+    for cp in coupons_linked:
+        tok = secrets.token_urlsafe(32)
+        session.add(
+            CouponIssue(
+                coupon_id=cp.id,
+                vote_id=vote.id,
+                token=tok,
+                email=email,
+            ),
+        )
+        coupon_tokens.append(tok)
+
     try:
         session.commit()
     except IntegrityError:
@@ -519,7 +627,56 @@ def submit_vote(
     return {
         "ok": True,
         "thank_you_message": row.thank_you_message,
+        "coupon_tokens": coupon_tokens,
     }
+
+
+@api_router.get("/public/coupon/{token}")
+def get_public_coupon_issue(
+    token: str,
+    session: Annotated[Session, Depends(get_session)],
+):
+    """発行済みクーポン LP 用（認証不要）。トークンは投票完了時にのみ付与される。"""
+    t = (token or "").strip()
+    if not t or len(t) > 64:
+        raise HTTPException(status_code=404, detail="not found")
+    issue = session.exec(select(CouponIssue).where(CouponIssue.token == t)).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="not found")
+    cp = session.get(Coupon, issue.coupon_id)
+    if not cp:
+        raise HTTPException(status_code=404, detail="not found")
+    ua = issue.used_at
+    return {
+        "name": cp.name,
+        "image_url": cp.image_url,
+        "description": cp.description,
+        "email": issue.email,
+        "used": ua is not None,
+        "used_at": ua.isoformat() if ua else None,
+    }
+
+
+@api_router.post("/public/coupon/{token}/use")
+def use_public_coupon_issue(
+    token: str,
+    session: Annotated[Session, Depends(get_session)],
+):
+    """クーポン利用を記録する（初回のみ used_at をセット。再呼び出しは冪等）。"""
+    t = (token or "").strip()
+    if not t or len(t) > 64:
+        raise HTTPException(status_code=404, detail="not found")
+    issue = session.exec(select(CouponIssue).where(CouponIssue.token == t)).first()
+    if not issue:
+        raise HTTPException(status_code=404, detail="not found")
+    now = datetime.now(timezone.utc)
+    if issue.used_at is None:
+        issue.used_at = now
+        session.add(issue)
+        session.commit()
+        session.refresh(issue)
+    ua = issue.used_at
+    return {"ok": True, "used_at": ua.isoformat() if ua else None}
 
 
 @api_router.post("/admin/campaigns", dependencies=[Depends(require_campaign_manager)])
@@ -642,6 +799,214 @@ def delete_campaign_product(
     session.commit()
     session.refresh(row)
     return row
+
+
+@api_router.get("/admin/coupons", dependencies=[Depends(require_campaign_manager)])
+def list_coupons(
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(require_campaign_manager)],
+):
+    if user.role in ("tenant", "user"):
+        if user.tenant_id is None:
+            raise HTTPException(status_code=400, detail="user has no tenant")
+        _assert_tenant_coupons_feature(session, user.tenant_id, user)
+    q = select(Coupon).order_by(Coupon.created_at.desc())
+    if user.role in ("tenant", "user"):
+        q = q.where(Coupon.tenant_id == user.tenant_id)
+    return session.exec(q).all()
+
+
+@api_router.post("/admin/coupons", dependencies=[Depends(require_campaign_manager)])
+def create_coupon(
+    payload: CouponCreate,
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(require_campaign_manager)],
+):
+    name = str(payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+
+    tid: int | None = None
+    if user.role in ("tenant", "user"):
+        if user.tenant_id is None:
+            raise HTTPException(status_code=400, detail="user has no tenant")
+        tid = user.tenant_id
+    elif user.role == "sysadmin":
+        if payload.tenant_id is None:
+            raise HTTPException(status_code=400, detail="tenant_id required")
+        tenant = session.get(Tenant, payload.tenant_id)
+        if not tenant:
+            raise HTTPException(status_code=404, detail="tenant not found")
+        tid = int(payload.tenant_id)
+    else:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    _assert_tenant_coupons_feature(session, tid, user)
+
+    img = str(payload.image_url).strip() if payload.image_url else None
+    if img == "":
+        img = None
+    desc = None
+    if payload.description is not None:
+        s = str(payload.description).strip()
+        desc = s or None
+
+    campaign_id_val = _validate_coupon_campaign_link(session, tid, payload.campaign_id)
+
+    now = datetime.now(timezone.utc)
+    row = Coupon(
+        tenant_id=tid,
+        campaign_id=campaign_id_val,
+        name=name,
+        image_url=img,
+        description=desc,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+@api_router.get("/admin/coupons/{coupon_id}", dependencies=[Depends(require_campaign_manager)])
+def get_coupon(
+    coupon_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(require_campaign_manager)],
+):
+    row = session.get(Coupon, coupon_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    _assert_coupon_access(row, user)
+    _assert_tenant_coupons_feature(session, row.tenant_id, user)
+    return row
+
+
+@api_router.get("/admin/coupons/{coupon_id}/issued-csv", dependencies=[Depends(require_campaign_manager)])
+def export_coupon_issues_csv(
+    coupon_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(require_campaign_manager)],
+):
+    """発行済みクーポン（投票連動で付与されたトークン）を CSV でダウンロード（1行1発行）。"""
+    row = session.get(Coupon, coupon_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    _assert_coupon_access(row, user)
+    _assert_tenant_coupons_feature(session, row.tenant_id, user)
+
+    issues = session.exec(
+        select(CouponIssue)
+        .where(CouponIssue.coupon_id == coupon_id)
+        .order_by(CouponIssue.created_at.asc())
+    ).all()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["email", "token", "issued_at", "used_at", "vote_id"])
+    for it in issues:
+        writer.writerow(
+            [
+                it.email,
+                it.token,
+                it.created_at.isoformat(),
+                it.used_at.isoformat() if it.used_at else "",
+                it.vote_id,
+            ]
+        )
+    body = "\ufeff" + buf.getvalue()
+    safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", row.name) or f"coupon-{coupon_id}"
+    return Response(
+        content=body.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{safe}-issued-coupons.csv"'},
+    )
+
+
+@api_router.patch("/admin/coupons/{coupon_id}", dependencies=[Depends(require_campaign_manager)])
+def update_coupon(
+    coupon_id: int,
+    payload: CouponUpdate,
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(require_campaign_manager)],
+):
+    row = session.get(Coupon, coupon_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    _assert_coupon_access(row, user)
+    _assert_tenant_coupons_feature(session, row.tenant_id, user)
+
+    data = payload.model_dump(exclude_unset=True)
+    if "tenant_id" in data:
+        if user.role != "sysadmin":
+            data.pop("tenant_id", None)
+        elif data.get("tenant_id") is not None:
+            tid = int(data["tenant_id"])
+            if not session.get(Tenant, tid):
+                raise HTTPException(status_code=404, detail="tenant not found")
+            data["tenant_id"] = tid
+
+    if "name" in data and data["name"] is not None:
+        n = str(data["name"]).strip()
+        if not n:
+            raise HTTPException(status_code=400, detail="name required")
+        data["name"] = n
+
+    if "image_url" in data:
+        img = data["image_url"]
+        if img is None or (isinstance(img, str) and not str(img).strip()):
+            data["image_url"] = None
+        elif isinstance(img, str):
+            data["image_url"] = str(img).strip() or None
+
+    if "description" in data:
+        dr = data["description"]
+        if dr is None:
+            data["description"] = None
+        else:
+            s = str(dr).strip()
+            data["description"] = s or None
+
+    eff_tid = row.tenant_id
+    if "tenant_id" in data and user.role == "sysadmin" and data.get("tenant_id") is not None:
+        eff_tid = int(data["tenant_id"])
+
+    if "campaign_id" in data:
+        data["campaign_id"] = _validate_coupon_campaign_link(session, eff_tid, data.get("campaign_id"))
+    elif "tenant_id" in data and user.role == "sysadmin" and data.get("tenant_id") is not None:
+        new_tid = int(data["tenant_id"])
+        if row.campaign_id is not None:
+            c = session.get(Campaign, row.campaign_id)
+            if not c or c.tenant_id != new_tid:
+                data["campaign_id"] = None
+
+    if not data:
+        return row
+
+    now = datetime.now(timezone.utc)
+    for k, v in data.items():
+        setattr(row, k, v)
+    row.updated_at = now
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+@api_router.delete("/admin/coupons/{coupon_id}", dependencies=[Depends(require_campaign_manager)])
+def delete_coupon(
+    coupon_id: int,
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(require_campaign_manager)],
+):
+    row = session.get(Coupon, coupon_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    _assert_coupon_access(row, user)
+    _assert_tenant_coupons_feature(session, row.tenant_id, user)
+    session.delete(row)
+    session.commit()
+    return {"ok": True}
 
 
 app.include_router(api_router)

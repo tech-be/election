@@ -1,8 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { apiPost } from "../../lib/api";
+import { apiPost, type VoteSubmitResponse } from "../../lib/api";
 import { resolveMediaUrl, type ProductDraft } from "../../lib/products";
 import { resolveNoLandingEndMessage } from "../../lib/noLandingEndMessage";
 import { resolveVoteConfirmBody, resolveVoteConfirmTitle } from "../../lib/voteConfirmModal";
@@ -84,6 +85,8 @@ export function CampaignVoteSection({
   const [doneMessage, setDoneMessage] = useState<string | null>(null);
   /** 投票後、ランディングURLなしのときの全画面サンクス */
   const [plainThankYouEnd, setPlainThankYouEnd] = useState(false);
+  /** 企画連動クーポン発行時の LP トークン（/coupon/{token}） */
+  const [issuedCouponTokens, setIssuedCouponTokens] = useState<string[]>([]);
 
   const selectedSet = useMemo(() => new Set(selectedOrder), [selectedOrder]);
   const couponHref = useMemo(() => pickFirstHttpUrl(landingUrl ?? undefined), [landingUrl]);
@@ -106,6 +109,7 @@ export function CampaignVoteSection({
     if (need === 0 || selectedOrder.length !== need) return;
     setError(null);
     setDoneMessage(null);
+    setIssuedCouponTokens([]);
     setEmail("");
     setModalOpen(true);
   }, [need, selectedOrder.length]);
@@ -114,6 +118,7 @@ export function CampaignVoteSection({
     setModalOpen(false);
     setError(null);
     setSubmitting(false);
+    setIssuedCouponTokens([]);
   }, []);
 
   useEffect(() => {
@@ -130,13 +135,15 @@ export function CampaignVoteSection({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await apiPost<{ ok: boolean; thank_you_message?: string | null }>(
+      const res = await apiPost<VoteSubmitResponse>(
         `/campaigns/${encodeURIComponent(campaignCode)}/votes`,
         {
           email: email.trim(),
           product_indices: selectedOrder,
         },
       );
+      const tokens = res.coupon_tokens ?? [];
+      setIssuedCouponTokens(tokens);
       const fromApi =
         res.thank_you_message != null && String(res.thank_you_message).trim()
           ? String(res.thank_you_message).trim()
@@ -146,7 +153,9 @@ export function CampaignVoteSection({
           ? String(thankYouMessage).trim()
           : null;
       const msg = fromApi ?? fromProps ?? "投票ありがとうございました。";
-      if (!pickFirstHttpUrl(landingUrl ?? undefined)) {
+      const externalUrl = pickFirstHttpUrl(landingUrl ?? undefined);
+      const hasIssuedCoupons = tokens.length > 0;
+      if (!externalUrl && !hasIssuedCoupons) {
         setModalOpen(false);
         setPlainThankYouEnd(true);
         return;
@@ -343,17 +352,33 @@ export function CampaignVoteSection({
                   {doneMessage}
                 </p>
                 <div className="flex flex-col gap-3">
-                  <button
-                    type="button"
-                    disabled={!couponHref}
-                    onClick={handleCouponClick}
-                    className="w-full rounded-2xl bg-gradient-to-r from-amber-400 to-orange-400 px-4 py-3 text-sm font-extrabold text-amber-950 hover:from-amber-300 hover:to-orange-300 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    クーポンをゲット
-                  </button>
-                  {!couponHref ? (
+                  {issuedCouponTokens.length > 0 ? (
+                    <div className="space-y-2">
+                      {issuedCouponTokens.map((tok, i) => (
+                        <Link
+                          key={tok}
+                          href={`/coupon/${encodeURIComponent(tok)}`}
+                          className="flex w-full items-center justify-center rounded-2xl bg-gradient-to-r from-violet-500 to-indigo-500 px-4 py-3 text-sm font-extrabold text-white shadow-md hover:from-violet-400 hover:to-indigo-400"
+                        >
+                          {issuedCouponTokens.length > 1
+                            ? `クーポン ${i + 1} を表示`
+                            : "クーポンを表示する"}
+                        </Link>
+                      ))}
+                    </div>
+                  ) : null}
+                  {couponHref ? (
+                    <button
+                      type="button"
+                      onClick={handleCouponClick}
+                      className="w-full rounded-2xl bg-gradient-to-r from-amber-400 to-orange-400 px-4 py-3 text-sm font-extrabold text-amber-950 hover:from-amber-300 hover:to-orange-300"
+                    >
+                      クーポンをゲット
+                    </button>
+                  ) : null}
+                  {!couponHref && issuedCouponTokens.length === 0 ? (
                     <p className="text-center text-xs text-slate-500">
-                      ランディング先URLが未設定のため、クーポン導線は利用できません。
+                      ランディング先URLが未設定のため、外部へのクーポン導線は利用できません。
                     </p>
                   ) : null}
                   <button
@@ -361,6 +386,7 @@ export function CampaignVoteSection({
                     onClick={() => {
                       setSelectedOrder([]);
                       setDoneMessage(null);
+                      setIssuedCouponTokens([]);
                       closeModal();
                     }}
                     className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-extrabold text-slate-800 hover:bg-slate-50"

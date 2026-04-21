@@ -1,3 +1,20 @@
+export type Tenant = {
+  id: number;
+  name: string;
+  coupons_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AuthMe = {
+  id: number;
+  email: string;
+  role: string;
+  tenant_id: number | null;
+  /** テナント／ユーザ権限のときのみ。シスアドは null */
+  tenant_coupons_enabled: boolean | null;
+};
+
 export type Campaign = {
   id: number;
   tenant_id: number;
@@ -32,6 +49,33 @@ export type CampaignVoteResults = {
   campaign_name: string;
   total_ballots: number;
   items: CampaignVoteResultItem[];
+};
+
+export type Coupon = {
+  id: number;
+  tenant_id: number;
+  campaign_id?: number | null;
+  name: string;
+  image_url?: string | null;
+  description?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** 公開クーポン LP（トークン URL）用 */
+export type PublicCouponIssue = {
+  name: string;
+  image_url?: string | null;
+  description?: string | null;
+  email: string;
+  used: boolean;
+  used_at?: string | null;
+};
+
+export type VoteSubmitResponse = {
+  ok: boolean;
+  thank_you_message?: string | null;
+  coupon_tokens?: string[];
 };
 
 function baseUrl(): string {
