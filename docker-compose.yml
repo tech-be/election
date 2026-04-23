@@ -13,7 +13,7 @@ services:
       context: ./backend
     environment:
       DATABASE_URL: postgresql+psycopg://funsite:funsite@db:5432/funsite
-      CORS_ORIGINS: http://localhost:3001
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
       ADMIN_PASSWORD: admin
     ports:
       - "8001:8000"
