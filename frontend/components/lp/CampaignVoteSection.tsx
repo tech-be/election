@@ -3,7 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { apiPost, type VoteSubmitResponse } from "../../lib/api";
+import {
+  apiPostWithStatus,
+  type VoteSubmitConflictResponse,
+  type VoteSubmitResponse,
+} from "../../lib/api";
 import { resolveMediaUrl, type ProductDraft } from "../../lib/products";
 import { resolveNoLandingEndMessage } from "../../lib/noLandingEndMessage";
 import { resolveVoteConfirmBody, resolveVoteConfirmTitle } from "../../lib/voteConfirmModal";
@@ -83,10 +87,20 @@ export function CampaignVoteSection({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [doneMessage, setDoneMessage] = useState<string | null>(null);
-  /** 投票後、ランディングURLなしのときの全画面サンクス */
+  /** 投票後、ランディングURLなし＆クーポン未発行のときの全画面サンクス */
   const [plainThankYouEnd, setPlainThankYouEnd] = useState(false);
-  /** 企画連動クーポン発行時の LP トークン（/coupon/{token}） */
-  const [issuedCouponTokens, setIssuedCouponTokens] = useState<string[]>([]);
+  /** クーポン LP が発行されたあとの投票完了全画面（メッセージ・内部クーポンURL・任意で外部URL） */
+  const [postVoteWithCoupons, setPostVoteWithCoupons] = useState<{
+    message: string;
+    tokens: string[];
+    externalUrl: string | null;
+  } | null>(null);
+  /** 重複投票（登録済みアドレス）: 投票済表示 + クーポン導線 */
+  const [alreadyVotedEnd, setAlreadyVotedEnd] = useState<{
+    tokens: string[];
+    externalUrl: string | null;
+    thankYouLine: string | null;
+  } | null>(null);
 
   const selectedSet = useMemo(() => new Set(selectedOrder), [selectedOrder]);
   const couponHref = useMemo(() => pickFirstHttpUrl(landingUrl ?? undefined), [landingUrl]);
@@ -109,7 +123,8 @@ export function CampaignVoteSection({
     if (need === 0 || selectedOrder.length !== need) return;
     setError(null);
     setDoneMessage(null);
-    setIssuedCouponTokens([]);
+    setPostVoteWithCoupons(null);
+    setAlreadyVotedEnd(null);
     setEmail("");
     setModalOpen(true);
   }, [need, selectedOrder.length]);
@@ -118,7 +133,6 @@ export function CampaignVoteSection({
     setModalOpen(false);
     setError(null);
     setSubmitting(false);
-    setIssuedCouponTokens([]);
   }, []);
 
   useEffect(() => {
@@ -135,18 +149,53 @@ export function CampaignVoteSection({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await apiPost<VoteSubmitResponse>(
+      const { res, data } = await apiPostWithStatus<VoteSubmitResponse & VoteSubmitConflictResponse>(
         `/campaigns/${encodeURIComponent(campaignCode)}/votes`,
         {
           email: email.trim(),
           product_indices: selectedOrder,
         },
       );
-      const tokens = res.coupon_tokens ?? [];
-      setIssuedCouponTokens(tokens);
+      if (res.status === 409) {
+        const tokens = (data.coupon_tokens ?? data.couponTokens ?? []).filter(
+          (t): t is string => Boolean(t && String(t).trim()),
+        );
+        const tApi =
+          data.thank_you_message != null && String(data.thank_you_message).trim()
+            ? String(data.thank_you_message).trim()
+            : null;
+        const tProps =
+          thankYouMessage != null && String(thankYouMessage).trim()
+            ? String(thankYouMessage).trim()
+            : null;
+        const thankYouLine = tApi ?? tProps ?? null;
+        const externalUrl = pickFirstHttpUrl(landingUrl ?? undefined) ?? null;
+        setModalOpen(false);
+        setAlreadyVotedEnd({ tokens, externalUrl, thankYouLine });
+        return;
+      }
+      if (!res.ok) {
+        const text = JSON.stringify(data) || res.statusText;
+        let detail = "";
+        try {
+          detail = String((data as { detail?: unknown }).detail ?? "");
+        } catch {
+          detail = text;
+        }
+        if (String(detail).toLowerCase().includes("already voted")) {
+          setError("このメールアドレスでは既に投票済みです。");
+        } else {
+          setError("送信に失敗しました。時間をおいて再度お試しください。");
+        }
+        return;
+      }
+      const payload = data as VoteSubmitResponse;
+      const tokens = (payload.coupon_tokens ?? payload.couponTokens ?? []).filter(
+        (t): t is string => Boolean(t && String(t).trim()),
+      );
       const fromApi =
-        res.thank_you_message != null && String(res.thank_you_message).trim()
-          ? String(res.thank_you_message).trim()
+        payload.thank_you_message != null && String(payload.thank_you_message).trim()
+          ? String(payload.thank_you_message).trim()
           : null;
       const fromProps =
         thankYouMessage != null && String(thankYouMessage).trim()
@@ -155,29 +204,23 @@ export function CampaignVoteSection({
       const msg = fromApi ?? fromProps ?? "投票ありがとうございました。";
       const externalUrl = pickFirstHttpUrl(landingUrl ?? undefined);
       const hasIssuedCoupons = tokens.length > 0;
-      if (!externalUrl && !hasIssuedCoupons) {
+      if (hasIssuedCoupons) {
+        setModalOpen(false);
+        setPostVoteWithCoupons({ message: msg, tokens, externalUrl: externalUrl ?? null });
+        return;
+      }
+      if (!externalUrl) {
         setModalOpen(false);
         setPlainThankYouEnd(true);
         return;
       }
       setDoneMessage(msg);
-    } catch (e) {
-      const text = e instanceof Error ? e.message : String(e);
-      let detail = "";
-      try {
-        detail = String((JSON.parse(text) as { detail?: unknown }).detail ?? "");
-      } catch {
-        detail = text;
-      }
-      if (detail.toLowerCase().includes("already voted")) {
-        setError("このメールアドレスでは既に投票済みです。");
-      } else {
-        setError("送信に失敗しました。時間をおいて再度お試しください。");
-      }
+    } catch {
+      setError("送信に失敗しました。時間をおいて再度お試しください。");
     } finally {
       setSubmitting(false);
     }
-  }, [campaignCode, email, landingUrl, need, selectedOrder, thankYouMessage]);
+  }, [campaignCode, email, landingUrl, need, selectedOrder, thankYouMessage, noLandingEndMessage]);
 
   const handleCouponClick = useCallback(() => {
     if (!couponHref) return;
@@ -203,6 +246,112 @@ export function CampaignVoteSection({
     );
   }
 
+  if (postVoteWithCoupons) {
+    const { message, tokens, externalUrl } = postVoteWithCoupons;
+    const endLine = resolveNoLandingEndMessage(noLandingEndMessage);
+    const thanksExtra =
+      message.trim() && message.trim() !== endLine.trim() ? message.trim() : null;
+    return (
+      <div className="fixed inset-0 z-[250] flex items-center justify-center bg-white px-4 py-8">
+        <div className="w-full max-w-md space-y-5 text-center">
+          <p className="whitespace-pre-wrap text-lg font-medium leading-relaxed tracking-tight text-slate-900">
+            {endLine}
+          </p>
+          {thanksExtra ? (
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-600">{thanksExtra}</p>
+          ) : null}
+          <div className="flex flex-col gap-3">
+            {tokens.map((tok, i) => (
+              <Link
+                key={tok}
+                href={`/coupon/${encodeURIComponent(tok)}`}
+                className="flex w-full items-center justify-center rounded-2xl bg-gradient-to-r from-violet-500 to-indigo-500 px-4 py-3 text-sm font-extrabold text-white shadow-md hover:from-violet-400 hover:to-indigo-400"
+              >
+                {tokens.length > 1 ? `クーポン ${i + 1} を表示` : "クーポンを表示する"}
+              </Link>
+            ))}
+            {externalUrl ? (
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.assign(externalUrl);
+                }}
+                className="w-full rounded-2xl bg-gradient-to-r from-amber-400 to-orange-400 px-4 py-3 text-sm font-extrabold text-amber-950 hover:from-amber-300 hover:to-orange-300"
+              >
+                クーポンをゲット
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedOrder([]);
+                setPostVoteWithCoupons(null);
+              }}
+              className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-extrabold text-slate-800 hover:bg-slate-50"
+            >
+              閉じる
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (alreadyVotedEnd) {
+    const { tokens, externalUrl, thankYouLine } = alreadyVotedEnd;
+    const endLine = resolveNoLandingEndMessage(noLandingEndMessage);
+    const hasCouponLinks = tokens.length > 0;
+    return (
+      <div className="fixed inset-0 z-[250] flex items-center justify-center bg-white px-4 py-8">
+        <div className="w-full max-w-md space-y-5 text-center">
+          <h2 className="text-lg font-semibold text-slate-900">投票済み</h2>
+          <p className="text-sm leading-relaxed text-slate-600">
+            このメールアドレスは、すでに本企画に投票しています。重複の投票はできません。
+          </p>
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-500">{endLine}</p>
+          {thankYouLine && thankYouLine.trim() !== endLine.trim() ? (
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-600">{thankYouLine}</p>
+          ) : null}
+          {hasCouponLinks || externalUrl ? (
+            <p className="text-left text-xs text-slate-500">クーポン連動の企画の場合、以下のリンクから表示できます。</p>
+          ) : null}
+          <div className="flex flex-col gap-3">
+            {tokens.map((tok, i) => (
+              <Link
+                key={tok}
+                href={`/coupon/${encodeURIComponent(tok)}`}
+                className="flex w-full items-center justify-center rounded-2xl bg-gradient-to-r from-violet-500 to-indigo-500 px-4 py-3 text-sm font-extrabold text-white shadow-md hover:from-violet-400 hover:to-indigo-400"
+              >
+                {tokens.length > 1 ? `クーポン ${i + 1} を表示` : "クーポンを表示する"}
+              </Link>
+            ))}
+            {externalUrl ? (
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.assign(externalUrl);
+                }}
+                className="w-full rounded-2xl bg-gradient-to-r from-amber-400 to-orange-400 px-4 py-3 text-sm font-extrabold text-amber-950 hover:from-amber-300 hover:to-orange-300"
+              >
+                クーポンをゲット
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedOrder([]);
+                setAlreadyVotedEnd(null);
+              }}
+              className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-extrabold text-slate-800 hover:bg-slate-50"
+            >
+              閉じる
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8 pb-28">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-slate-200/90 bg-white/90 px-5 py-4 text-sm text-slate-800 shadow-sm backdrop-blur">
@@ -214,7 +363,7 @@ export function CampaignVoteSection({
           選択 {selectedOrder.length}/{need}
         </div>
       </div>
-      <div className="space-y-8">
+      <div className="grid grid-cols-2 gap-3 sm:gap-5">
         {products.map((p, idx) => {
           const images = [p.image1Url, p.image2Url, p.image3Url].filter(
             (u): u is string => Boolean(u && String(u).trim()),
@@ -223,30 +372,30 @@ export function CampaignVoteSection({
           return (
             <div
               key={p.sortId ?? `product-${idx}`}
-              className={`overflow-hidden rounded-3xl border text-left shadow-[0_16px_48px_rgba(15,23,42,0.08)] backdrop-blur transition ${
+              className={`min-w-0 overflow-hidden rounded-2xl border text-left shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur transition sm:rounded-3xl ${
                 on
-                  ? "border-indigo-400 ring-4 ring-indigo-300/35"
+                  ? "border-indigo-400 ring-2 ring-indigo-300/40 sm:ring-4"
                   : "border-slate-200/90 hover:border-slate-300"
               } bg-white/90`}
             >
               <article>
-                <div className="space-y-3 p-6">
-                  <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="space-y-2 p-3 sm:space-y-3 sm:p-5">
+                  <div className="flex items-center justify-end gap-2">
                     {on ? (
-                      <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-extrabold text-indigo-900">
+                      <span className="shrink-0 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-extrabold text-indigo-900 sm:text-xs">
                         選択中
                       </span>
                     ) : null}
                     <button
                       type="button"
                       onClick={() => toggle(idx)}
-                      className={`rounded-2xl px-4 py-2 text-sm font-extrabold transition ${
+                      className={`shrink-0 rounded-xl px-3 py-1.5 text-xs font-extrabold transition sm:rounded-2xl sm:px-4 sm:py-2 sm:text-sm ${
                         on
                           ? "border border-indigo-400 bg-indigo-600 text-white hover:bg-indigo-500"
                           : "border border-slate-300 bg-white text-slate-800 hover:border-slate-400 hover:bg-slate-50"
                       }`}
                     >
-                      {on ? "選択を解除" : "選択"}
+                      {on ? "解除" : "選択"}
                     </button>
                   </div>
                   <button
@@ -258,19 +407,19 @@ export function CampaignVoteSection({
                         ? `${p.name || "このアイテム"}の選択を解除`
                         : `${p.name || "このアイテム"}を選択`
                     }
-                    className="w-full rounded-xl text-left text-2xl font-extrabold tracking-tight text-slate-900 outline-none ring-indigo-500/0 transition hover:bg-slate-50/90 focus-visible:ring-2 focus-visible:ring-indigo-400"
+                    className="w-full rounded-lg text-left text-base font-extrabold leading-snug tracking-tight text-slate-900 outline-none ring-indigo-500/0 transition hover:bg-slate-50/90 focus-visible:ring-2 focus-visible:ring-indigo-400 sm:rounded-xl sm:text-lg"
                   >
                     {p.name || "（名称なし）"}
                   </button>
                   {p.description ? (
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-600">
+                    <p className="line-clamp-4 whitespace-pre-wrap text-xs leading-relaxed text-slate-600 sm:line-clamp-none sm:text-sm">
                       {p.description}
                     </p>
                   ) : null}
                 </div>
                 {images.length > 0 ? (
                   <div
-                    className={`grid justify-items-center gap-2 border-t border-slate-100 bg-slate-50/80 p-4 ${
+                    className={`grid justify-items-stretch gap-1.5 border-t border-slate-100 bg-slate-50/80 p-2 sm:gap-2 sm:p-3 ${
                       images.length === 1
                         ? "grid-cols-1"
                         : images.length === 2
@@ -292,7 +441,7 @@ export function CampaignVoteSection({
                               ? `${p.name || "アイテム"}の画像${i + 1}・選択を解除`
                               : `${p.name || "アイテム"}の画像${i + 1}をタップして選択`
                           }
-                          className="relative aspect-square w-full max-w-[320px] overflow-hidden rounded-2xl border border-slate-200 bg-transparent p-0 text-left outline-none ring-indigo-500/0 transition hover:border-indigo-300 hover:opacity-95 focus-visible:ring-2 focus-visible:ring-indigo-400"
+                          className="relative aspect-square w-full max-w-none overflow-hidden rounded-lg border border-slate-200 bg-transparent p-0 text-left outline-none ring-indigo-500/0 transition hover:border-indigo-300 hover:opacity-95 focus-visible:ring-2 focus-visible:ring-indigo-400 sm:max-w-[320px] sm:rounded-2xl"
                         >
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
@@ -352,21 +501,6 @@ export function CampaignVoteSection({
                   {doneMessage}
                 </p>
                 <div className="flex flex-col gap-3">
-                  {issuedCouponTokens.length > 0 ? (
-                    <div className="space-y-2">
-                      {issuedCouponTokens.map((tok, i) => (
-                        <Link
-                          key={tok}
-                          href={`/coupon/${encodeURIComponent(tok)}`}
-                          className="flex w-full items-center justify-center rounded-2xl bg-gradient-to-r from-violet-500 to-indigo-500 px-4 py-3 text-sm font-extrabold text-white shadow-md hover:from-violet-400 hover:to-indigo-400"
-                        >
-                          {issuedCouponTokens.length > 1
-                            ? `クーポン ${i + 1} を表示`
-                            : "クーポンを表示する"}
-                        </Link>
-                      ))}
-                    </div>
-                  ) : null}
                   {couponHref ? (
                     <button
                       type="button"
@@ -376,7 +510,7 @@ export function CampaignVoteSection({
                       クーポンをゲット
                     </button>
                   ) : null}
-                  {!couponHref && issuedCouponTokens.length === 0 ? (
+                  {!couponHref ? (
                     <p className="text-center text-xs text-slate-500">
                       ランディング先URLが未設定のため、外部へのクーポン導線は利用できません。
                     </p>
@@ -386,7 +520,6 @@ export function CampaignVoteSection({
                     onClick={() => {
                       setSelectedOrder([]);
                       setDoneMessage(null);
-                      setIssuedCouponTokens([]);
                       closeModal();
                     }}
                     className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-extrabold text-slate-800 hover:bg-slate-50"
