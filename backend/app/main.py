@@ -56,6 +56,33 @@ def _clamp_vote_max_products(raw: int | None) -> int:
     return n
 
 
+def _json_response_already_voted(
+    session: Session,
+    campaign: Campaign,
+    email: str,
+) -> JSONResponse:
+    """同一企画に同一メールの投票が既にあるとき（重複 or 排他違反リカバリ用）。"""
+    ev = session.exec(
+        select(Vote).where(Vote.campaign_id == campaign.id, Vote.email == email)
+    ).first()
+    tokens: list[str] = []
+    if ev is not None:
+        issues = session.exec(
+            select(CouponIssue)
+            .where(CouponIssue.vote_id == ev.id)
+            .order_by(CouponIssue.id)
+        ).all()
+        tokens = [i.token for i in issues]
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": "already_voted",
+            "thank_you_message": campaign.thank_you_message,
+            "coupon_tokens": tokens,
+        },
+    )
+
+
 def _assert_sysadmin_or_tenant_of_tenant(user: User, tenant_id: int) -> None:
     if user.role == "sysadmin":
         return
@@ -590,21 +617,26 @@ def submit_vote(
         if not isinstance(i, int) or i < 0 or i >= n:
             raise HTTPException(status_code=400, detail="invalid product index")
 
+    if session.exec(select(Vote).where(Vote.campaign_id == row.id, Vote.email == email)).first():
+        return _json_response_already_voted(session, row, email)
+
     vote = Vote(
         campaign_id=row.id,
         email=email,
         product_indices_json=json.dumps(idxs, ensure_ascii=False),
     )
     session.add(vote)
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError:
+        session.rollback()
+        return _json_response_already_voted(session, row, email)
 
-    tenant_row = session.get(Tenant, row.tenant_id)
-    if tenant_row and not tenant_row.coupons_enabled:
-        coupons_linked = []
-    else:
-        coupons_linked = session.exec(
-            select(Coupon).where(Coupon.campaign_id == row.id).order_by(Coupon.id)
-        ).all()
+    # 企画に紐づくクーポンは投票完了時に発行する。tenant.coupons_enabled は管理画面の
+    # クーポン API 利用制限用であり、来場者向けの発行を黙殺すると LP にリンクが出ない。
+    coupons_linked = session.exec(
+        select(Coupon).where(Coupon.campaign_id == row.id).order_by(Coupon.id)
+    ).all()
     coupon_tokens: list[str] = []
     for cp in coupons_linked:
         tok = secrets.token_urlsafe(32)
@@ -622,7 +654,7 @@ def submit_vote(
         session.commit()
     except IntegrityError:
         session.rollback()
-        raise HTTPException(status_code=409, detail="already voted with this email")
+        return _json_response_already_voted(session, row, email)
     session.refresh(vote)
     return {
         "ok": True,

@@ -76,7 +76,43 @@ export type VoteSubmitResponse = {
   ok: boolean;
   thank_you_message?: string | null;
   coupon_tokens?: string[];
+  /** 一部のゲートウェイ等で snake_case 以外で返る場合の保険 */
+  couponTokens?: string[];
 };
+
+/** POST /campaigns/.../votes の 409（重複投票）用 */
+export type VoteSubmitConflictResponse = {
+  detail?: string;
+  thank_you_message?: string | null;
+  coupon_tokens?: string[];
+  couponTokens?: string[];
+};
+
+export async function apiPostWithStatus<T>(
+  path: string,
+  body: unknown,
+  init?: RequestInit,
+): Promise<{ res: Response; data: T }> {
+  const res = await fetch(apiUrl(path), {
+    method: "POST",
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data = {} as T;
+  if (text) {
+    try {
+      data = JSON.parse(text) as T;
+    } catch {
+      data = {} as T;
+    }
+  }
+  return { res, data };
+}
 
 function baseUrl(): string {
   // Server-side (Node in container) must use docker network.
