@@ -1,6 +1,7 @@
 export type Tenant = {
   id: number;
   name: string;
+  active: boolean;
   coupons_enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -58,6 +59,8 @@ export type Coupon = {
   name: string;
   image_url?: string | null;
   description?: string | null;
+  /** 公開 LP 見出し（未設定時は COUPON_LP_DEFAULT_TITLE を表示） */
+  lp_title?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -67,6 +70,7 @@ export type PublicCouponIssue = {
   name: string;
   image_url?: string | null;
   description?: string | null;
+  lp_title?: string | null;
   email: string;
   used: boolean;
   used_at?: string | null;

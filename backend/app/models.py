@@ -16,6 +16,8 @@ class Tenant(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(max_length=200)
+    # テナント自体の有効・無効。無効時は当該テナント配下ユーザはログイン不可。
+    active: bool = Field(default=True)
     # シスアドがテナント単位でクーポン機能の利用を許可するか（無効時は当該テナント向け管理API・投票時の発行を停止）。既定は OFF。
     coupons_enabled: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utcnow)
@@ -77,6 +79,22 @@ class Campaign(CampaignBase, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class CampaignProduct(SQLModel, table=True):
+    __tablename__ = "campaign_products"
+    __table_args__ = (UniqueConstraint("campaign_id", "index", name="uq_campaign_products_campaign_index"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    campaign_id: int = Field(foreign_key="campaigns.id", index=True)
+    # 0-based index (matches existing products_json semantics)
+    index: int = Field(index=True)
+    name: str = Field(default="", max_length=200)
+    description: Optional[str] = None
+    image1_url: Optional[str] = Field(default=None, max_length=500)
+    image2_url: Optional[str] = Field(default=None, max_length=500)
+    image3_url: Optional[str] = Field(default=None, max_length=500)
+    sort_id: Optional[str] = Field(default=None, max_length=64)
+
+
 class CampaignCreate(CampaignBase):
     """シスアドが企画を作るときは tenant_id を指定する（テナント配下ユーザはサーバ側で付与）。"""
 
@@ -111,6 +129,15 @@ class Vote(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class VoteItem(SQLModel, table=True):
+    __tablename__ = "vote_items"
+    __table_args__ = (UniqueConstraint("vote_id", "product_index", name="uq_vote_items_vote_product_index"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    vote_id: int = Field(foreign_key="votes.id", index=True)
+    product_index: int = Field(index=True)
+
+
 class Coupon(SQLModel, table=True):
     __tablename__ = "coupons"
 
@@ -121,6 +148,8 @@ class Coupon(SQLModel, table=True):
     name: str = Field(max_length=200)
     image_url: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = None
+    # 公開クーポン LP の見出し（未設定時はフロントのデフォルト文言を表示）
+    lp_title: Optional[str] = Field(default=None, max_length=200)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -129,6 +158,7 @@ class CouponCreate(SQLModel):
     name: str = Field(max_length=200)
     image_url: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = None
+    lp_title: Optional[str] = Field(default=None, max_length=200)
     tenant_id: Optional[int] = None
     campaign_id: Optional[int] = None
 
@@ -137,6 +167,7 @@ class CouponUpdate(SQLModel):
     name: Optional[str] = Field(default=None, max_length=200)
     image_url: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = None
+    lp_title: Optional[str] = Field(default=None, max_length=200)
     tenant_id: Optional[int] = None
     campaign_id: Optional[int] = None
 

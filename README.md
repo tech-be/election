@@ -64,6 +64,43 @@ docker compose up --build -d
 
 API のベース URL は `.env_sample` / `.env` を参照してください。その他の環境変数やパスワードは `docker-compose.yml` を参照してください。
 
+## 本番デプロイ（VPS/EC2 等・Docker Compose）
+
+このリポジトリには、サーバ上でそのまま使える本番用 Compose を同梱しています（`docker-compose.prod.yml`）。HTTPS は Caddy が自動で証明書を取得します。
+
+### 前提
+
+- サーバに Docker / Docker Compose が入っている
+- DNS でドメイン（例: `example.com`）がサーバを向いている
+- 80/443 を開けている
+
+### サーバ手順
+
+1. サーバにこのリポジトリを配置（`git clone` など）
+2. リポジトリルートに `.env` を作成し、最低限以下を設定
+
+```bash
+DOMAIN=example.com
+CADDY_EMAIL=admin@example.com
+POSTGRES_PASSWORD=change_me
+ADMIN_PASSWORD=change_me
+NEXT_PUBLIC_API_BASE_URL=https://example.com
+CORS_ORIGINS=https://example.com
+```
+
+3. 起動（初回はビルドに時間がかかります）
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+### 停止・ログ
+
+```bash
+docker compose -f docker-compose.prod.yml logs -f
+docker compose -f docker-compose.prod.yml down
+```
+
 ## 管理画面
 
 - ログイン: `http://localhost:3001/admin/login`
