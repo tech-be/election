@@ -4,6 +4,9 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { apiDelete, apiGet, apiUrl, type Campaign, type Coupon } from "../../../lib/api";
+import { Modal } from "../../../components/admin/Modal";
+import { CouponEditPanel } from "../../../components/admin/CouponEditPanel";
+import { CouponCreatePanel } from "../../../components/admin/CouponCreatePanel";
 import { resolveMediaUrl } from "../../../lib/products";
 
 type TenantRow = { id: number; name: string };
@@ -18,6 +21,8 @@ export default function AdminCouponsPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [downloadingIssuedId, setDownloadingIssuedId] = useState<number | null>(null);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [creatingOpen, setCreatingOpen] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -87,12 +92,14 @@ export default function AdminCouponsPage() {
           <div className="text-xs text-slate-400">管理画面</div>
           <h1 className="text-2xl font-semibold tracking-tight">クーポン一覧</h1>
         </div>
-        <Link
+        <button
           className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
-          href="/admin/coupons/new"
+          type="button"
+          disabled={!token}
+          onClick={() => setCreatingOpen(true)}
         >
           新規登録
-        </Link>
+        </button>
       </header>
 
       {mounted && !token ? (
@@ -175,11 +182,21 @@ export default function AdminCouponsPage() {
                   )}
                 </div>
                 <div className="col-span-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-                  <Link
-                    className="text-slate-200 underline hover:text-white"
-                    href={`/admin/coupons/${r.id}/edit`}
+                  <button
+                    type="button"
+                    className="text-slate-200 underline hover:text-white disabled:opacity-50"
+                    disabled={!token}
+                    onClick={() => setEditingId(r.id)}
                   >
                     編集
+                  </button>
+                  <Link
+                    className="text-sm text-indigo-300 underline hover:text-indigo-200"
+                    href={`/coupon-preview/${r.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    LPテスト表示
                   </Link>
                   <button
                     type="button"
@@ -251,6 +268,27 @@ export default function AdminCouponsPage() {
           )}
         </div>
       </section>
+
+      {editingId != null && token ? (
+        <Modal title="クーポン編集" maxWidthClassName="max-w-6xl" onClose={() => setEditingId(null)}>
+          <CouponEditPanel
+            couponId={editingId}
+            token={token}
+            onClose={() => setEditingId(null)}
+            onSaved={(u) => setRows((prev) => prev.map((x) => (x.id === u.id ? { ...x, ...u } : x)))}
+          />
+        </Modal>
+      ) : null}
+
+      {creatingOpen && token ? (
+        <Modal title="クーポン新規登録" maxWidthClassName="max-w-6xl" onClose={() => setCreatingOpen(false)}>
+          <CouponCreatePanel
+            token={token}
+            onClose={() => setCreatingOpen(false)}
+            onCreated={(c) => setRows((prev) => [c, ...prev])}
+          />
+        </Modal>
+      ) : null}
     </main>
   );
 }

@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -24,6 +25,7 @@ from app.models import (
     Campaign,
     CampaignCreate,
     CampaignUpdate,
+    CampaignProduct,
     Coupon,
     CouponCreate,
     CouponIssue,
@@ -32,6 +34,7 @@ from app.models import (
     Tenant,
     User,
     Vote,
+    VoteItem,
 )
 
 LP_BACKGROUND_KEYS = frozenset(
@@ -81,6 +84,66 @@ def _json_response_already_voted(
             "coupon_tokens": tokens,
         },
     )
+
+
+def _campaign_products_to_json_list(session: Session, campaign_id: int) -> list[dict]:
+    products = session.exec(
+        select(CampaignProduct)
+        .where(CampaignProduct.campaign_id == campaign_id)
+        .order_by(CampaignProduct.index.asc())
+    ).all()
+    out: list[dict] = []
+    for p in products:
+        out.append(
+            {
+                "name": p.name,
+                "description": p.description,
+                "image1Url": p.image1_url,
+                "image2Url": p.image2_url,
+                "image3Url": p.image3_url,
+                "sortId": p.sort_id,
+            }
+        )
+    return out
+
+
+def _sync_campaign_products_from_list(session: Session, campaign_id: int, products_list: list) -> None:
+    # replace strategy (keeps semantics consistent with current UI / products_json)
+    for p in session.exec(select(CampaignProduct).where(CampaignProduct.campaign_id == campaign_id)).all():
+        session.delete(p)
+
+    for idx, raw in enumerate(products_list):
+        if isinstance(raw, dict):
+            name = str(raw.get("name", "") or "").strip()
+            desc_raw = raw.get("description")
+            desc = str(desc_raw) if desc_raw is not None else None
+            i1 = str(raw.get("image1Url") or "").strip() or None
+            i2 = str(raw.get("image2Url") or "").strip() or None
+            i3 = str(raw.get("image3Url") or "").strip() or None
+            sort_id = str(raw.get("sortId") or "").strip() or None
+        elif isinstance(raw, str):
+            name = raw.strip()
+            desc = None
+            i1 = i2 = i3 = None
+            sort_id = None
+        else:
+            name = ""
+            desc = None
+            i1 = i2 = i3 = None
+            sort_id = None
+
+        session.add(
+            CampaignProduct(
+                campaign_id=campaign_id,
+                index=idx,
+                name=name,
+                description=desc,
+                image1_url=i1,
+                image2_url=i2,
+                image3_url=i3,
+                sort_id=sort_id,
+            )
+        )
 
 
 def _assert_sysadmin_or_tenant_of_tenant(user: User, tenant_id: int) -> None:
@@ -175,6 +238,12 @@ def admin_login(
     if not verify_password(password, user.password_hash):
         raise HTTPException(status_code=401, detail="invalid credentials")
 
+    # テナント配下ユーザは、テナントが無効の場合ログイン不可
+    if user.role in ("tenant", "user") and user.tenant_id is not None:
+        t = session.get(Tenant, user.tenant_id)
+        if not t or not bool(getattr(t, "active", True)):
+            raise HTTPException(status_code=403, detail="tenant is disabled")
+
     token = secrets.token_hex(32)
     row = SessionToken(token=token, user_id=user.id, created_at=datetime.now(timezone.utc), expires_at=None)
     session.add(row)
@@ -250,7 +319,7 @@ def create_tenant(payload: dict, session: Annotated[Session, Depends(get_session
     if not name:
         raise HTTPException(status_code=400, detail="name required")
     now = datetime.now(timezone.utc)
-    row = Tenant(name=name, coupons_enabled=False, created_at=now, updated_at=now)
+    row = Tenant(name=name, active=True, coupons_enabled=False, created_at=now, updated_at=now)
     session.add(row)
     session.commit()
     session.refresh(row)
@@ -263,11 +332,13 @@ def patch_tenant(
     payload: dict,
     session: Annotated[Session, Depends(get_session)],
 ):
-    """テナント設定の更新（現状は coupons_enabled のみ）。"""
+    """テナント設定の更新（active / coupons_enabled）。"""
     row = session.get(Tenant, tenant_id)
     if not row:
         raise HTTPException(status_code=404, detail="tenant not found")
     now = datetime.now(timezone.utc)
+    if "active" in payload:
+        row.active = bool(payload["active"])
     if "coupons_enabled" in payload:
         row.coupons_enabled = bool(payload["coupons_enabled"])
     row.updated_at = now
@@ -466,57 +537,79 @@ def list_admin_campaigns(
         if user.tenant_id is None:
             raise HTTPException(status_code=400, detail="user has no tenant")
         q = q.where(Campaign.tenant_id == user.tenant_id)
-    return session.exec(q).all()
+    rows = session.exec(q).all()
+
+    # Avoid N+1: load all products in one query and group in memory.
+    ids = [r.id for r in rows if r.id is not None]
+    grouped: dict[int, list[CampaignProduct]] = {}
+    if ids:
+        all_products = session.exec(
+            select(CampaignProduct)
+            .where(CampaignProduct.campaign_id.in_(ids))
+            .order_by(CampaignProduct.campaign_id.asc(), CampaignProduct.index.asc())
+        ).all()
+        for p in all_products:
+            grouped.setdefault(int(p.campaign_id), []).append(p)
+
+    for r in rows:
+        cid = int(r.id) if r.id is not None else None
+        if cid is None:
+            continue
+        prods = grouped.get(cid, [])
+        r.products_json = json.dumps(
+            [
+                {
+                    "name": p.name,
+                    "description": p.description,
+                    "image1Url": p.image1_url,
+                    "image2Url": p.image2_url,
+                    "image3Url": p.image3_url,
+                    "sortId": p.sort_id,
+                }
+                for p in prods
+            ],
+            ensure_ascii=False,
+        )
+    return rows
 
 
 def _campaign_vote_results_payload(row: Campaign, session: Session) -> dict:
-    try:
-        products = json.loads(row.products_json or "[]")
-    except Exception:
-        products = []
-    if not isinstance(products, list):
-        products = []
+    products = session.exec(
+        select(CampaignProduct).where(CampaignProduct.campaign_id == row.id).order_by(CampaignProduct.index.asc())
+    ).all()
+    counts: dict[int, int] = {int(p.index): 0 for p in products}
 
-    counts: dict[int, int] = {i: 0 for i in range(len(products))}
-    votes = session.exec(select(Vote).where(Vote.campaign_id == row.id)).all()
-    for v in votes:
-        try:
-            idxs = json.loads(v.product_indices_json or "[]")
-        except Exception:
-            continue
-        if not isinstance(idxs, list):
-            continue
-        for raw in idxs:
-            if isinstance(raw, int) and raw in counts:
-                counts[raw] += 1
+    total_ballots = int(
+        session.exec(select(func.count()).select_from(Vote).where(Vote.campaign_id == row.id)).one() or 0
+    )
+
+    rows = session.exec(
+        select(VoteItem.product_index, func.count())
+        .join(Vote, Vote.id == VoteItem.vote_id)
+        .where(Vote.campaign_id == row.id)
+        .group_by(VoteItem.product_index)
+    ).all()
+    for (pidx, cnt) in rows:
+        if isinstance(pidx, int) and pidx in counts:
+            counts[pidx] = int(cnt or 0)
 
     items: list[dict] = []
-    for idx in range(len(products)):
-        p = products[idx]
+    for p in products:
+        idx = int(p.index)
         name = f"アイテム {idx + 1}"
+        if str(p.name or "").strip():
+            name = str(p.name).strip()
         img: str | None = None
-        if isinstance(p, dict):
-            name = str(p.get("name", "") or "").strip() or name
-            for k in ("image1Url", "image2Url", "image3Url"):
-                v = p.get(k)
-                if v and str(v).strip():
-                    img = str(v).strip()
-                    break
-        elif isinstance(p, str) and p.strip():
-            name = p.strip()
-        items.append(
-            {
-                "index": idx,
-                "vote_count": counts.get(idx, 0),
-                "name": name,
-                "image_url": img,
-            }
-        )
+        for v in (p.image1_url, p.image2_url, p.image3_url):
+            if v and str(v).strip():
+                img = str(v).strip()
+                break
+        items.append({"index": idx, "vote_count": counts.get(idx, 0), "name": name, "image_url": img})
     items.sort(key=lambda x: (-x["vote_count"], x["index"]))
     return {
         "campaign_code": row.code,
         "campaign_name": row.name,
-        "total_ballots": len(votes),
+        "total_ballots": total_ballots,
         "items": items,
     }
 
@@ -548,12 +641,16 @@ def export_campaign_vote_emails_csv(
     if user.role in ("tenant", "user") and row.tenant_id != user.tenant_id:
         raise HTTPException(status_code=403, detail="forbidden")
 
-    votes = session.exec(select(Vote).where(Vote.campaign_id == row.id).order_by(Vote.created_at.asc())).all()
+    votes = session.exec(
+        select(Vote.email, Vote.created_at)
+        .where(Vote.campaign_id == row.id)
+        .order_by(Vote.created_at.asc())
+    ).all()
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["email", "voted_at"])
-    for v in votes:
-        writer.writerow([v.email, v.created_at.isoformat()])
+    for (email, created_at) in votes:
+        writer.writerow([email, created_at.isoformat()])
     body = "\ufeff" + buf.getvalue()
     safe_code = re.sub(r"[^a-zA-Z0-9._-]+", "_", code) or "campaign"
     return Response(
@@ -571,6 +668,7 @@ def get_campaign(
     row = session.exec(select(Campaign).where(Campaign.code == code)).first()
     if not row:
         raise HTTPException(status_code=404, detail="not found")
+    row.products_json = json.dumps(_campaign_products_to_json_list(session, row.id), ensure_ascii=False)
     return row
 
 
@@ -591,13 +689,12 @@ def submit_vote(
     row = session.exec(select(Campaign).where(Campaign.code == code)).first()
     if not row:
         raise HTTPException(status_code=404, detail="not found")
-    try:
-        products = json.loads(row.products_json or "[]")
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid campaign products")
-    if not isinstance(products, list):
-        raise HTTPException(status_code=400, detail="invalid campaign products")
-    n = len(products)
+    n = int(
+        session.exec(
+            select(func.count()).select_from(CampaignProduct).where(CampaignProduct.campaign_id == row.id)
+        ).one()
+        or 0
+    )
     if n == 0:
         raise HTTPException(status_code=400, detail="no products to vote on")
 
@@ -631,6 +728,9 @@ def submit_vote(
     except IntegrityError:
         session.rollback()
         return _json_response_already_voted(session, row, email)
+
+    for i in idxs:
+        session.add(VoteItem(vote_id=vote.id, product_index=int(i)))
 
     # 企画に紐づくクーポンは投票完了時に発行する。tenant.coupons_enabled は管理画面の
     # クーポン API 利用制限用であり、来場者向けの発行を黙殺すると LP にリンクが出ない。
@@ -683,6 +783,7 @@ def get_public_coupon_issue(
         "name": cp.name,
         "image_url": cp.image_url,
         "description": cp.description,
+        "lp_title": cp.lp_title,
         "email": issue.email,
         "used": ua is not None,
         "used_at": ua.isoformat() if ua else None,
@@ -719,9 +820,11 @@ def create_campaign(
 ):
     # basic validation: products_json must be JSON
     try:
-        json.loads(payload.products_json or "[]")
+        products_list = json.loads(payload.products_json or "[]")
     except Exception:
         raise HTTPException(status_code=400, detail="products_json must be JSON string")
+    if not isinstance(products_list, list):
+        raise HTTPException(status_code=400, detail="products_json must be JSON array")
 
     exists = session.exec(select(Campaign).where(Campaign.code == payload.code)).first()
     if exists:
@@ -746,8 +849,11 @@ def create_campaign(
     data["vote_max_products"] = _clamp_vote_max_products(data.get("vote_max_products"))
     row = Campaign(**data, created_at=now, updated_at=now)
     session.add(row)
+    session.flush()
+    _sync_campaign_products_from_list(session, row.id, products_list)
     session.commit()
     session.refresh(row)
+    row.products_json = json.dumps(_campaign_products_to_json_list(session, row.id), ensure_ascii=False)
     return row
 
 
@@ -771,16 +877,22 @@ def update_campaign(
         data["vote_max_products"] = _clamp_vote_max_products(int(data["vote_max_products"]))
     if "products_json" in data and data["products_json"] is not None:
         try:
-            json.loads(data["products_json"] or "[]")
+            products_list = json.loads(data["products_json"] or "[]")
         except Exception:
             raise HTTPException(status_code=400, detail="products_json must be JSON string")
+        if not isinstance(products_list, list):
+            raise HTTPException(status_code=400, detail="products_json must be JSON array")
 
     for k, v in data.items():
         setattr(row, k, v)
     row.updated_at = datetime.now(timezone.utc)
     session.add(row)
+    session.flush()
+    if "products_json" in data and data["products_json"] is not None:
+        _sync_campaign_products_from_list(session, row.id, products_list)
     session.commit()
     session.refresh(row)
+    row.products_json = json.dumps(_campaign_products_to_json_list(session, row.id), ensure_ascii=False)
     return row
 
 
@@ -797,7 +909,11 @@ def delete_campaign(
         raise HTTPException(status_code=403, detail="forbidden")
 
     for v in session.exec(select(Vote).where(Vote.campaign_id == row.id)).all():
+        for it in session.exec(select(VoteItem).where(VoteItem.vote_id == v.id)).all():
+            session.delete(it)
         session.delete(v)
+    for p in session.exec(select(CampaignProduct).where(CampaignProduct.campaign_id == row.id)).all():
+        session.delete(p)
     session.delete(row)
     session.commit()
     return {"ok": True}
@@ -810,26 +926,40 @@ def delete_campaign_product(
     session: Annotated[Session, Depends(get_session)],
     user: Annotated[User, Depends(require_campaign_manager)],
 ):
-    """Remove one product from the campaign's products_json array (0-based index)."""
+    """Remove one product from the campaign (0-based index)."""
     row = session.exec(select(Campaign).where(Campaign.code == code)).first()
     if not row:
         raise HTTPException(status_code=404, detail="not found")
     if user.role in ("tenant", "user") and row.tenant_id != user.tenant_id:
         raise HTTPException(status_code=403, detail="forbidden")
-    try:
-        products = json.loads(row.products_json or "[]")
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid products_json")
-    if not isinstance(products, list):
-        raise HTTPException(status_code=400, detail="invalid products_json")
-    if index < 0 or index >= len(products):
+    n = int(
+        session.exec(
+            select(func.count()).select_from(CampaignProduct).where(CampaignProduct.campaign_id == row.id)
+        ).one()
+        or 0
+    )
+    if index < 0 or index >= n:
         raise HTTPException(status_code=404, detail="product index out of range")
-    products.pop(index)
-    row.products_json = json.dumps(products, ensure_ascii=False)
+
+    target = session.exec(
+        select(CampaignProduct).where(CampaignProduct.campaign_id == row.id, CampaignProduct.index == index)
+    ).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="product index out of range")
+    session.delete(target)
+    for p in session.exec(
+        select(CampaignProduct)
+        .where(CampaignProduct.campaign_id == row.id, CampaignProduct.index > index)
+        .order_by(CampaignProduct.index.asc())
+    ).all():
+        p.index = int(p.index) - 1
+        session.add(p)
+
     row.updated_at = datetime.now(timezone.utc)
     session.add(row)
     session.commit()
     session.refresh(row)
+    row.products_json = json.dumps(_campaign_products_to_json_list(session, row.id), ensure_ascii=False)
     return row
 
 
@@ -883,6 +1013,11 @@ def create_coupon(
         s = str(payload.description).strip()
         desc = s or None
 
+    lp_title: str | None = None
+    if payload.lp_title is not None:
+        s2 = str(payload.lp_title).strip()
+        lp_title = s2 or None
+
     campaign_id_val = _validate_coupon_campaign_link(session, tid, payload.campaign_id)
 
     now = datetime.now(timezone.utc)
@@ -892,6 +1027,7 @@ def create_coupon(
         name=name,
         image_url=img,
         description=desc,
+        lp_title=lp_title,
         created_at=now,
         updated_at=now,
     )
@@ -998,6 +1134,14 @@ def update_coupon(
         else:
             s = str(dr).strip()
             data["description"] = s or None
+
+    if "lp_title" in data:
+        lt = data["lp_title"]
+        if lt is None:
+            data["lp_title"] = None
+        else:
+            s = str(lt).strip()
+            data["lp_title"] = s or None
 
     eff_tid = row.tenant_id
     if "tenant_id" in data and user.role == "sysadmin" and data.get("tenant_id") is not None:

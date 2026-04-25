@@ -4,6 +4,9 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { apiDelete, apiGet, apiUrl, type Campaign, type CampaignVoteResults } from "../../../lib/api";
+import { Modal } from "../../../components/admin/Modal";
+import { CampaignEditPanel } from "../../../components/admin/CampaignEditPanel";
+import { CampaignCreatePanel } from "../../../components/admin/CampaignCreatePanel";
 import { resolveMediaUrl } from "../../../lib/products";
 
 type TenantRow = { id: number; name: string };
@@ -22,6 +25,8 @@ export default function AdminCampaignsPage() {
   const [resultsData, setResultsData] = useState<CampaignVoteResults | null>(null);
   const [resultsError, setResultsError] = useState<string | null>(null);
   const [downloadingEmailsCode, setDownloadingEmailsCode] = useState<string | null>(null);
+  const [editingCode, setEditingCode] = useState<string | null>(null);
+  const [creatingOpen, setCreatingOpen] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -72,12 +77,14 @@ export default function AdminCampaignsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">企画一覧</h1>
         </div>
         <div className="flex items-center gap-3">
-          <Link
+          <button
             className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
-            href="/admin/campaigns/new"
+            type="button"
+            disabled={!token}
+            onClick={() => setCreatingOpen(true)}
           >
             企画新規登録
-          </Link>
+          </button>
         </div>
       </header>
 
@@ -126,12 +133,14 @@ export default function AdminCampaignsPage() {
                   {r.name}
                 </div>
                 <div className="col-span-4 flex flex-wrap items-center gap-x-3 gap-y-2">
-                  <Link
-                    className="text-slate-200 underline hover:text-white"
-                    href={`/admin/campaigns/${encodeURIComponent(r.code)}/edit`}
+                  <button
+                    type="button"
+                    className="text-slate-200 underline hover:text-white disabled:opacity-50"
+                    disabled={!token}
+                    onClick={() => setEditingCode(r.code)}
                   >
                     編集
-                  </Link>
+                  </button>
                   <button
                     type="button"
                     className="text-sm text-sky-300 underline hover:text-sky-200 disabled:opacity-50"
@@ -328,6 +337,29 @@ export default function AdminCampaignsPage() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {editingCode && token ? (
+        <Modal title="企画編集" maxWidthClassName="max-w-6xl" onClose={() => setEditingCode(null)}>
+          <CampaignEditPanel
+            code={editingCode}
+            token={token}
+            onClose={() => setEditingCode(null)}
+            onSaved={(u) => {
+              setRows((prev) => prev.map((x) => (x.code === u.code ? { ...x, ...u } : x)));
+            }}
+          />
+        </Modal>
+      ) : null}
+
+      {creatingOpen && token ? (
+        <Modal title="企画新規登録" maxWidthClassName="max-w-6xl" onClose={() => setCreatingOpen(false)}>
+          <CampaignCreatePanel
+            token={token}
+            onClose={() => setCreatingOpen(false)}
+            onCreated={(c) => setRows((prev) => [c, ...prev])}
+          />
+        </Modal>
       ) : null}
     </main>
   );

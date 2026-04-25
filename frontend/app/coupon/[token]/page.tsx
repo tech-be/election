@@ -107,6 +107,7 @@ export default function CouponIssueLpPage() {
   }
 
   const imgSrc = data.image_url ? resolveMediaUrl(data.image_url) : "";
+  const customLpTitle = data.lp_title?.trim() ?? "";
 
   return (
     <CouponLpShell narrow>
@@ -127,12 +128,18 @@ export default function CouponIssueLpPage() {
           ) : null}
 
           <h2 className="mb-6 text-center text-2xl font-extrabold leading-snug tracking-tight text-slate-900 sm:text-3xl sm:leading-tight">
-            特典を確認して、
-            <br className="sm:hidden" />
-            ご利用ください{" "}
-            <span className="inline-block" aria-hidden>
-              ✨
-            </span>
+            {customLpTitle ? (
+              <span className="whitespace-pre-line">{customLpTitle}</span>
+            ) : (
+              <>
+                特典を確認して、
+                <br className="sm:hidden" />
+                ご利用ください{" "}
+                <span className="inline-block" aria-hidden>
+                  ✨
+                </span>
+              </>
+            )}
           </h2>
           {imgSrc ? (
             <div className="mb-6 overflow-hidden rounded-2xl border border-pink-100/90 bg-white/70 shadow-[0_12px_40px_rgba(236,72,153,0.12)] ring-1 ring-pink-200/40">
