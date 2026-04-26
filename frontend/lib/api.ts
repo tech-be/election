@@ -124,7 +124,16 @@ function baseUrl(): string {
     return process.env.API_INTERNAL_BASE_URL ?? "http://backend:8000";
   }
   // Client-side uses host-mapped URL.
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
+  // NOTE: In Next.js, NEXT_PUBLIC_* is embedded at build-time into the client bundle.
+  // If it's missing during build, using a localhost fallback breaks production.
+  // Prefer same-origin when available.
+  const explicit = process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (explicit && explicit.trim()) return explicit.trim();
+  if (typeof window !== "undefined" && window.location && window.location.origin) {
+    const origin = window.location.origin;
+    if (origin && !origin.includes("localhost")) return origin;
+  }
+  return "http://localhost:8001";
 }
 
 /** Backend API のパスプレフィックス（`/uploads` など静的配信は含まない） */

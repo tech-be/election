@@ -60,9 +60,12 @@ export function resolveMediaUrl(url: string | null | undefined): string {
   const u = (url ?? "").trim();
   if (!u) return "";
   if (u.startsWith("http://") || u.startsWith("https://")) return u;
+  const explicit = typeof process !== "undefined" ? process.env.NEXT_PUBLIC_API_BASE_URL : undefined;
   const base =
-    typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_BASE_URL
-      ? process.env.NEXT_PUBLIC_API_BASE_URL
-      : "http://localhost:8001";
+    explicit && explicit.trim()
+      ? explicit.trim()
+      : typeof window !== "undefined" && window.location && window.location.origin
+        ? window.location.origin
+        : "http://localhost:8001";
   return u.startsWith("/") ? `${base}${u}` : `${base}/${u}`;
 }
