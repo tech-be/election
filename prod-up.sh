@@ -20,10 +20,10 @@ if [[ ! -f "$ROOT_DIR/.env" ]]; then
 fi
 
 echo "==> Starting production stack (docker-compose.prod.yml)"
-docker compose -f docker-compose.prod.yml up -d --build
+docker-compose -f docker-compose.prod.yml up -d --build
 
 echo "==> Running DB migrations (alembic upgrade head)"
-docker compose -f docker-compose.prod.yml exec -T backend alembic upgrade head
+docker-compose -f docker-compose.prod.yml exec -T backend alembic upgrade head
 
 echo "==> Health check"
 set +e
@@ -32,7 +32,7 @@ RC=$?
 set -e
 if [[ $RC -ne 0 ]]; then
   echo "WARN: health check failed. Check logs:"
-  echo "  docker compose -f docker-compose.prod.yml logs -f --tail=200 backend"
+  echo "  docker-compose -f docker-compose.prod.yml logs -f --tail=200 backend"
 else
   echo "OK: https://${DOMAIN}/api/health"
 fi
