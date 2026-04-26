@@ -13,7 +13,7 @@ services:
       context: ./backend
     environment:
       DATABASE_URL: postgresql+psycopg://funsite:funsite@db:5432/funsite
-      CORS_ORIGINS: http://localhost:3001
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
       ADMIN_PASSWORD: admin
     ports:
       - "8001:8000"
@@ -26,8 +26,8 @@ services:
     build:
       context: ./frontend
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8001
-      API_INTERNAL_BASE_URL: http://backend:8000
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8001}
+      API_INTERNAL_BASE_URL: ${API_INTERNAL_BASE_URL:-http://backend:8000}
     ports:
       - "3001:3000"
     depends_on:

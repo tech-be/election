@@ -1,3 +1,21 @@
+export type Tenant = {
+  id: number;
+  name: string;
+  active: boolean;
+  coupons_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AuthMe = {
+  id: number;
+  email: string;
+  role: string;
+  tenant_id: number | null;
+  /** テナント／ユーザ権限のときのみ。シスアドは null */
+  tenant_coupons_enabled: boolean | null;
+};
+
 export type Campaign = {
   id: number;
   tenant_id: number;
@@ -14,9 +32,91 @@ export type Campaign = {
   lp_intro_image_url?: string | null;
   lp_intro_text?: string | null;
   vote_max_products?: number;
+  vote_confirm_title?: string | null;
+  vote_confirm_body?: string | null;
   created_at: string;
   updated_at: string;
 };
+
+export type CampaignVoteResultItem = {
+  index: number;
+  vote_count: number;
+  name: string;
+  image_url: string | null;
+};
+
+export type CampaignVoteResults = {
+  campaign_code: string;
+  campaign_name: string;
+  total_ballots: number;
+  items: CampaignVoteResultItem[];
+};
+
+export type Coupon = {
+  id: number;
+  tenant_id: number;
+  campaign_id?: number | null;
+  name: string;
+  image_url?: string | null;
+  description?: string | null;
+  /** 公開 LP 見出し（未設定時は COUPON_LP_DEFAULT_TITLE を表示） */
+  lp_title?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** 公開クーポン LP（トークン URL）用 */
+export type PublicCouponIssue = {
+  name: string;
+  image_url?: string | null;
+  description?: string | null;
+  lp_title?: string | null;
+  email: string;
+  used: boolean;
+  used_at?: string | null;
+};
+
+export type VoteSubmitResponse = {
+  ok: boolean;
+  thank_you_message?: string | null;
+  coupon_tokens?: string[];
+  /** 一部のゲートウェイ等で snake_case 以外で返る場合の保険 */
+  couponTokens?: string[];
+};
+
+/** POST /campaigns/.../votes の 409（重複投票）用 */
+export type VoteSubmitConflictResponse = {
+  detail?: string;
+  thank_you_message?: string | null;
+  coupon_tokens?: string[];
+  couponTokens?: string[];
+};
+
+export async function apiPostWithStatus<T>(
+  path: string,
+  body: unknown,
+  init?: RequestInit,
+): Promise<{ res: Response; data: T }> {
+  const res = await fetch(apiUrl(path), {
+    method: "POST",
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data = {} as T;
+  if (text) {
+    try {
+      data = JSON.parse(text) as T;
+    } catch {
+      data = {} as T;
+    }
+  }
+  return { res, data };
+}
 
 function baseUrl(): string {
   // Server-side (Node in container) must use docker network.
@@ -27,8 +127,17 @@ function baseUrl(): string {
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
 }
 
+/** Backend API のパスプレフィックス（`/uploads` など静的配信は含まない） */
+const API_PREFIX = "/api";
+
+/** API の絶対URL（JSON 以外のレスポンス取得・ダウンロード用） */
+export function apiUrl(path: string): string {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${baseUrl()}${API_PREFIX}${p}`;
+}
+
 export async function apiGet<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${baseUrl()}${path}`, {
+  const res = await fetch(apiUrl(path), {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -45,7 +154,7 @@ export async function apiPost<T>(
   body: unknown,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(`${baseUrl()}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     ...init,
     headers: {
@@ -63,7 +172,7 @@ export async function apiPatch<T>(
   body: unknown,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(`${baseUrl()}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "PATCH",
     ...init,
     headers: {
@@ -77,7 +186,7 @@ export async function apiPatch<T>(
 }
 
 export async function apiDelete<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${baseUrl()}${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: "DELETE",
     ...init,
     headers: {

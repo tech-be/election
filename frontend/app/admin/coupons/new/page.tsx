@@ -1,15 +1,13 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-import { CampaignEditPanel } from "../../../../../components/admin/CampaignEditPanel";
+import { CouponCreatePanel } from "../../../../components/admin/CouponCreatePanel";
 
-export default function AdminCampaignEditPage() {
+export default function AdminCouponNewPage() {
   const router = useRouter();
-  const params = useParams<{ code: string }>();
-  const code = params.code;
-
   const [token, setToken] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
 
@@ -23,20 +21,23 @@ export default function AdminCampaignEditPage() {
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="text-xs text-slate-400">管理画面</div>
-          <h1 className="text-2xl font-semibold tracking-tight">企画編集</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">クーポン新規登録</h1>
         </div>
-        <button
-          type="button"
+        <Link
           className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-2 text-sm text-slate-200 hover:border-slate-500"
-          onClick={() => router.push("/admin/campaigns")}
+          href="/admin/coupons"
         >
           一覧へ戻る
-        </button>
+        </Link>
       </header>
 
-      {mounted ? (
-        <CampaignEditPanel code={code} token={token} onClose={() => router.push("/admin/campaigns")} />
+      {mounted && !token ? (
+        <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
+          ログイン情報がありません。先にログインしてください。
+        </div>
       ) : null}
+
+      {mounted ? <CouponCreatePanel token={token} onClose={() => router.push("/admin/coupons")} /> : null}
     </main>
   );
 }
