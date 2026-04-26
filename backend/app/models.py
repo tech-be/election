@@ -68,6 +68,8 @@ class CampaignBase(SQLModel):
     # 投票前の確認モーダル文言（未設定時はLP側デフォルト）
     vote_confirm_title: Optional[str] = Field(default=None, max_length=200)
     vote_confirm_body: Optional[str] = None
+    # 投票時にメールアドレス入力を必須にするか
+    email_required: bool = Field(default=True)
 
 
 class Campaign(CampaignBase, table=True):
@@ -116,6 +118,7 @@ class CampaignUpdate(SQLModel):
     vote_max_products: Optional[int] = None
     vote_confirm_title: Optional[str] = Field(default=None, max_length=200)
     vote_confirm_body: Optional[str] = None
+    email_required: Optional[bool] = None
 
 
 class Vote(SQLModel, table=True):
@@ -124,7 +127,7 @@ class Vote(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     campaign_id: int = Field(foreign_key="campaigns.id", index=True)
-    email: str = Field(max_length=254)
+    email: Optional[str] = Field(default=None, max_length=254)
     product_indices_json: str = Field(default="[]")
     created_at: datetime = Field(default_factory=utcnow)
 

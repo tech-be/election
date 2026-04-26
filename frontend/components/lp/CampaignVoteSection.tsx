@@ -18,6 +18,8 @@ type Props = {
   products: ProductDraft[];
   thankYouMessage: string | null;
   landingUrl: string | null;
+  /** メールアドレス入力を必須にするか */
+  emailRequired?: boolean;
   /** 企画の vote_max_products（未設定時は API 既定に合わせ 3 相当） */
   voteMaxProducts?: number;
   /** ランディングURL未設定時の終了メッセージ（DB未登録時は resolve でデフォルト） */
@@ -64,6 +66,7 @@ export function CampaignVoteSection({
   products,
   thankYouMessage,
   landingUrl,
+  emailRequired = true,
   voteMaxProducts,
   noLandingEndMessage,
   voteConfirmTitle,
@@ -145,14 +148,16 @@ export function CampaignVoteSection({
   }, [modalOpen, closeModal]);
 
   const submitVote = useCallback(async () => {
-    if (!isValidEmail(email) || need === 0 || selectedOrder.length !== need) return;
+    const trimmed = email.trim();
+    const emailOk = emailRequired ? isValidEmail(trimmed) : trimmed.length === 0 || isValidEmail(trimmed);
+    if (!emailOk || need === 0 || selectedOrder.length !== need) return;
     setSubmitting(true);
     setError(null);
     try {
       const { res, data } = await apiPostWithStatus<VoteSubmitResponse & VoteSubmitConflictResponse>(
         `/campaigns/${encodeURIComponent(campaignCode)}/votes`,
         {
-          email: email.trim(),
+          email: trimmed.length ? trimmed : null,
           product_indices: selectedOrder,
         },
       );
@@ -220,7 +225,16 @@ export function CampaignVoteSection({
     } finally {
       setSubmitting(false);
     }
-  }, [campaignCode, email, landingUrl, need, selectedOrder, thankYouMessage, noLandingEndMessage]);
+  }, [
+    campaignCode,
+    email,
+    emailRequired,
+    landingUrl,
+    need,
+    selectedOrder,
+    thankYouMessage,
+    noLandingEndMessage,
+  ]);
 
   const handleCouponClick = useCallback(() => {
     if (!couponHref) return;
@@ -571,7 +585,7 @@ export function CampaignVoteSection({
 
                 <div className="mt-6 space-y-2">
                   <label htmlFor="vote-email" className="text-sm font-medium text-slate-800">
-                    メールアドレス
+                    メールアドレス{emailRequired ? "" : "（任意）"}
                   </label>
                   <input
                     id="vote-email"
@@ -600,7 +614,10 @@ export function CampaignVoteSection({
                   </button>
                   <button
                     type="button"
-                    disabled={!isValidEmail(email) || submitting}
+                    disabled={
+                      submitting ||
+                      (emailRequired ? !isValidEmail(email) : !(email.trim().length === 0 || isValidEmail(email)))
+                    }
                     onClick={() => void submitVote()}
                     className="rounded-xl bg-indigo-500 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-40"
                   >

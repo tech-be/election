@@ -676,7 +676,7 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class VoteSubmitBody(BaseModel):
-    email: str = Field(min_length=3, max_length=254)
+    email: str | None = Field(default=None, max_length=254)
     product_indices: list[int] = Field(min_length=1, max_length=10)
 
 
@@ -701,9 +701,16 @@ def submit_vote(
     k_campaign = _clamp_vote_max_products(row.vote_max_products)
     need = min(k_campaign, n)
 
-    email = body.email.strip().lower()
-    if not email or not _EMAIL_RE.match(email):
-        raise HTTPException(status_code=400, detail="invalid email")
+    email_required = bool(getattr(row, "email_required", True))
+    raw_email = (body.email or "").strip().lower()
+    if email_required:
+        if not raw_email or not _EMAIL_RE.match(raw_email):
+            raise HTTPException(status_code=400, detail="invalid email")
+        email: str | None = raw_email
+    else:
+        if raw_email and not _EMAIL_RE.match(raw_email):
+            raise HTTPException(status_code=400, detail="invalid email")
+        email = raw_email or None
 
     idxs = body.product_indices
     if len(idxs) != need:
@@ -714,8 +721,9 @@ def submit_vote(
         if not isinstance(i, int) or i < 0 or i >= n:
             raise HTTPException(status_code=400, detail="invalid product index")
 
-    if session.exec(select(Vote).where(Vote.campaign_id == row.id, Vote.email == email)).first():
-        return _json_response_already_voted(session, row, email)
+    if email is not None:
+        if session.exec(select(Vote).where(Vote.campaign_id == row.id, Vote.email == email)).first():
+            return _json_response_already_voted(session, row, email)
 
     vote = Vote(
         campaign_id=row.id,
@@ -745,7 +753,7 @@ def submit_vote(
                 coupon_id=cp.id,
                 vote_id=vote.id,
                 token=tok,
-                email=email,
+                email=email or "",
             ),
         )
         coupon_tokens.append(tok)
@@ -754,6 +762,8 @@ def submit_vote(
         session.commit()
     except IntegrityError:
         session.rollback()
+        if email is None:
+            raise HTTPException(status_code=500, detail="failed to save vote")
         return _json_response_already_voted(session, row, email)
     session.refresh(vote)
     return {
