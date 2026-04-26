@@ -67,6 +67,7 @@ export function CampaignCreatePanel({
   const [lpIntroImageUrl, setLpIntroImageUrl] = useState("");
   const [lpIntroText, setLpIntroText] = useState("");
   const [voteMaxProducts, setVoteMaxProducts] = useState(3);
+  const [emailRequired, setEmailRequired] = useState(true);
   const [voteConfirmTitle, setVoteConfirmTitle] = useState("");
   const [voteConfirmBody, setVoteConfirmBody] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -387,6 +388,39 @@ export function CampaignCreatePanel({
               <p className="mt-1 text-xs text-slate-500">
                 「投票する」を押したあと、メールアドレス入力の前に表示される確認画面の文言です。
               </p>
+              <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/40 px-4 py-3 text-sm text-slate-200">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <div className="font-medium">メールアドレス取得</div>
+                    <span
+                      className={`rounded-lg border px-2 py-0.5 text-[11px] font-semibold ${
+                        emailRequired
+                          ? "border-emerald-700/60 bg-emerald-950/30 text-emerald-200"
+                          : "border-slate-700 bg-slate-950/40 text-slate-300"
+                      }`}
+                    >
+                      {emailRequired ? "必須" : "任意"}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500">投票時にメールアドレス入力を必須にするか</div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={emailRequired}
+                  disabled={!token}
+                  className={`relative h-7 w-12 shrink-0 rounded-full transition ${
+                    emailRequired ? "bg-emerald-600" : "bg-slate-600"
+                  } disabled:opacity-50`}
+                  onClick={() => setEmailRequired((v) => !v)}
+                >
+                  <span
+                    className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition ${
+                      emailRequired ? "left-5" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
               <label className="mt-4 block text-sm text-slate-200">
                 見出し
                 <input
@@ -496,6 +530,7 @@ export function CampaignCreatePanel({
                   lp_intro_image_url: lpIntroImageUrl.trim() ? lpIntroImageUrl.trim() : null,
                   lp_intro_text: lpIntroText.trim() ? lpIntroText.trim() : null,
                   vote_max_products: voteMaxProducts,
+                  email_required: emailRequired,
                   vote_confirm_title: voteConfirmTitle.trim() ? voteConfirmTitle.trim() : null,
                   vote_confirm_body: voteConfirmBody.trim() ? voteConfirmBody.trim() : null,
                 };

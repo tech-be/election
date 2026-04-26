@@ -34,6 +34,7 @@ export type Campaign = {
   vote_max_products?: number;
   vote_confirm_title?: string | null;
   vote_confirm_body?: string | null;
+  email_required?: boolean;
   created_at: string;
   updated_at: string;
 };
