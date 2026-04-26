@@ -1,0 +1,22 @@
+{
+  # Email is required for Let's Encrypt. Override with CADDY_EMAIL env if desired.
+  email {$CADDY_EMAIL}
+}
+
+{$DOMAIN} {
+  encode gzip
+
+  # API + uploaded assets
+  handle_path /api/* {
+    reverse_proxy backend:8000
+  }
+  handle_path /uploads/* {
+    reverse_proxy backend:8000
+  }
+
+  # Everything else -> Next.js
+  handle {
+    reverse_proxy frontend:3000
+  }
+}
+
