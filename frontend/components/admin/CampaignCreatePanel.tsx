@@ -68,6 +68,8 @@ export function CampaignCreatePanel({
   const [lpIntroText, setLpIntroText] = useState("");
   const [voteMaxProducts, setVoteMaxProducts] = useState(3);
   const [emailRequired, setEmailRequired] = useState(true);
+  const [startsAt, setStartsAt] = useState("");
+  const [endsAt, setEndsAt] = useState("");
   const [voteConfirmTitle, setVoteConfirmTitle] = useState("");
   const [voteConfirmBody, setVoteConfirmBody] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -180,6 +182,29 @@ export function CampaignCreatePanel({
                 公開LPではこの件数まで選べます（登録アイテムが少ない場合はその件数まで）。
               </p>
             </label>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="text-sm text-slate-200">
+                開始日時（公開開始）
+                <input
+                  type="datetime-local"
+                  className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+                  value={startsAt}
+                  onChange={(e) => setStartsAt(e.target.value)}
+                />
+                <p className="mt-1 text-xs text-slate-500">未設定なら常に公開。</p>
+              </label>
+              <label className="text-sm text-slate-200">
+                終了日時（公開終了）
+                <input
+                  type="datetime-local"
+                  className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+                  value={endsAt}
+                  onChange={(e) => setEndsAt(e.target.value)}
+                />
+                <p className="mt-1 text-xs text-slate-500">未設定なら終了なし。</p>
+              </label>
+            </div>
 
             <div className="grid gap-4 md:grid-cols-2">
               <label className="text-sm text-slate-200">
@@ -531,6 +556,8 @@ export function CampaignCreatePanel({
                   lp_intro_text: lpIntroText.trim() ? lpIntroText.trim() : null,
                   vote_max_products: voteMaxProducts,
                   email_required: emailRequired,
+                  starts_at: startsAt.trim() ? new Date(startsAt).toISOString() : null,
+                  ends_at: endsAt.trim() ? new Date(endsAt).toISOString() : null,
                   vote_confirm_title: voteConfirmTitle.trim() ? voteConfirmTitle.trim() : null,
                   vote_confirm_body: voteConfirmBody.trim() ? voteConfirmBody.trim() : null,
                 };

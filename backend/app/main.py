@@ -59,6 +59,52 @@ def _clamp_vote_max_products(raw: int | None) -> int:
     return n
 
 
+def _validate_period(starts_at: datetime | None, ends_at: datetime | None, field_prefix: str) -> None:
+    if starts_at is not None and starts_at.tzinfo is None:
+        raise HTTPException(status_code=400, detail=f"{field_prefix}.starts_at must be timezone-aware")
+    if ends_at is not None and ends_at.tzinfo is None:
+        raise HTTPException(status_code=400, detail=f"{field_prefix}.ends_at must be timezone-aware")
+    if starts_at is not None and ends_at is not None and starts_at > ends_at:
+        raise HTTPException(status_code=400, detail=f"{field_prefix}: starts_at must be <= ends_at")
+
+
+def _in_period(now: datetime, starts_at: datetime | None, ends_at: datetime | None) -> bool:
+    if starts_at is not None and now < starts_at:
+        return False
+    if ends_at is not None and now > ends_at:
+        return False
+    return True
+
+
+def _mint_token_urlsafe_64() -> str:
+    """Generate a URL-safe token that fits varchar(64)."""
+    # token_urlsafe(32) is typically 43 chars, safely under 64.
+    for _ in range(20):
+        t = secrets.token_urlsafe(32)
+        if 1 <= len(t) <= 64:
+            return t
+    # Fallback: shorter
+    return secrets.token_urlsafe(24)[:64]
+
+
+def _mint_unique_coupon_issue_token(session: Session) -> str:
+    """Best-effort uniqueness check; DB unique constraint is final authority."""
+    for _ in range(10):
+        t = _mint_token_urlsafe_64()
+        if session.exec(select(CouponIssue).where(CouponIssue.token == t)).first() is None:
+            return t
+    raise HTTPException(status_code=500, detail="failed to mint coupon token")
+
+
+def _mint_unique_coupon_test_token(session: Session) -> str:
+    """Best-effort uniqueness check for coupons.test_token."""
+    for _ in range(10):
+        t = _mint_token_urlsafe_64()
+        if session.exec(select(Coupon).where(Coupon.test_token == t)).first() is None:
+            return t
+    raise HTTPException(status_code=500, detail="failed to mint test token")
+
+
 def _json_response_already_voted(
     session: Session,
     campaign: Campaign,
@@ -587,6 +633,22 @@ def list_admin_campaigns(
     return rows
 
 
+@api_router.get("/admin/campaigns/{code}", dependencies=[Depends(require_campaign_manager)])
+def get_admin_campaign(
+    code: str,
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(require_campaign_manager)],
+):
+    """管理画面向けの企画取得（期間外でも取得可）。"""
+    row = session.exec(select(Campaign).where(Campaign.code == code)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    if user.role in ("tenant", "user") and row.tenant_id != user.tenant_id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    row.products_json = json.dumps(_campaign_products_to_json_list(session, row.id), ensure_ascii=False)
+    return row
+
+
 def _campaign_vote_results_payload(row: Campaign, session: Session) -> dict:
     products = session.exec(
         select(CampaignProduct).where(CampaignProduct.campaign_id == row.id).order_by(CampaignProduct.index.asc())
@@ -682,6 +744,16 @@ def get_campaign(
     row = session.exec(select(Campaign).where(Campaign.code == code)).first()
     if not row:
         raise HTTPException(status_code=404, detail="not found")
+    now = datetime.now(timezone.utc)
+    if not _in_period(now, getattr(row, "starts_at", None), getattr(row, "ends_at", None)):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "out_of_period",
+                "starts_at": row.starts_at.isoformat() if getattr(row, "starts_at", None) else None,
+                "ends_at": row.ends_at.isoformat() if getattr(row, "ends_at", None) else None,
+            },
+        )
     row.products_json = json.dumps(_campaign_products_to_json_list(session, row.id), ensure_ascii=False)
     return row
 
@@ -702,6 +774,9 @@ def submit_vote(
 ):
     row = session.exec(select(Campaign).where(Campaign.code == code)).first()
     if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    now = datetime.now(timezone.utc)
+    if not _in_period(now, getattr(row, "starts_at", None), getattr(row, "ends_at", None)):
         raise HTTPException(status_code=404, detail="not found")
     n = int(
         session.exec(
@@ -761,16 +836,31 @@ def submit_vote(
     ).all()
     coupon_tokens: list[str] = []
     for cp in coupons_linked:
-        tok = secrets.token_urlsafe(32)
-        session.add(
-            CouponIssue(
-                coupon_id=cp.id,
-                vote_id=vote.id,
-                token=tok,
-                email=email or "",
-            ),
-        )
-        coupon_tokens.append(tok)
+        if not _in_period(now, getattr(cp, "issue_starts_at", None), getattr(cp, "use_ends_at", None)):
+            continue
+        minted: str | None = None
+        for _ in range(10):
+            tok = _mint_unique_coupon_issue_token(session)
+            try:
+                with session.begin_nested():
+                    session.add(
+                        CouponIssue(
+                            coupon_id=cp.id,
+                            vote_id=vote.id,
+                            token=tok,
+                            email=email or "",
+                        )
+                    )
+                    session.flush()
+                minted = tok
+                break
+            except IntegrityError:
+                # token collision (or other unique violation): retry with a new token
+                session.rollback()
+                continue
+        if minted is None:
+            raise HTTPException(status_code=500, detail="failed to mint unique coupon token")
+        coupon_tokens.append(minted)
 
     try:
         session.commit()
@@ -802,6 +892,18 @@ def get_public_coupon_issue(
     cp = session.get(Coupon, issue.coupon_id)
     if not cp:
         raise HTTPException(status_code=404, detail="not found")
+    now = datetime.now(timezone.utc)
+    if not _in_period(now, getattr(cp, "issue_starts_at", None), getattr(cp, "use_ends_at", None)):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "out_of_period",
+                "starts_at": cp.issue_starts_at.isoformat()
+                if getattr(cp, "issue_starts_at", None)
+                else None,
+                "ends_at": cp.use_ends_at.isoformat() if getattr(cp, "use_ends_at", None) else None,
+            },
+        )
     ua = issue.used_at
     return {
         "name": cp.name,
@@ -812,6 +914,64 @@ def get_public_coupon_issue(
         "used": ua is not None,
         "used_at": ua.isoformat() if ua else None,
     }
+
+
+@api_router.get("/public/coupon-test/{token}")
+def get_public_coupon_test(
+    token: str,
+    session: Annotated[Session, Depends(get_session)],
+):
+    """管理画面のテスト用クーポンLP（認証不要）。期間外は out_of_period を返す。利用は保存しない。"""
+    t = (token or "").strip()
+    if not t or len(t) > 64:
+        raise HTTPException(status_code=404, detail="not found")
+    cp = session.exec(select(Coupon).where(Coupon.test_token == t)).first()
+    if not cp:
+        raise HTTPException(status_code=404, detail="not found")
+    now = datetime.now(timezone.utc)
+    if not _in_period(now, getattr(cp, "issue_starts_at", None), getattr(cp, "use_ends_at", None)):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "out_of_period",
+                "starts_at": cp.issue_starts_at.isoformat() if getattr(cp, "issue_starts_at", None) else None,
+                "ends_at": cp.use_ends_at.isoformat() if getattr(cp, "use_ends_at", None) else None,
+            },
+        )
+    return {
+        "name": cp.name,
+        "image_url": cp.image_url,
+        "description": cp.description,
+        "lp_title": cp.lp_title,
+        "email": "",
+        "used": False,
+        "used_at": None,
+    }
+
+
+@api_router.post("/public/coupon-test/{token}/use")
+def use_public_coupon_test(
+    token: str,
+    session: Annotated[Session, Depends(get_session)],
+):
+    """テスト用: 利用ボタンは押せるがDBには保存しない。"""
+    t = (token or "").strip()
+    if not t or len(t) > 64:
+        raise HTTPException(status_code=404, detail="not found")
+    cp = session.exec(select(Coupon).where(Coupon.test_token == t)).first()
+    if not cp:
+        raise HTTPException(status_code=404, detail="not found")
+    now = datetime.now(timezone.utc)
+    if not _in_period(now, getattr(cp, "issue_starts_at", None), getattr(cp, "use_ends_at", None)):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "out_of_period",
+                "starts_at": cp.issue_starts_at.isoformat() if getattr(cp, "issue_starts_at", None) else None,
+                "ends_at": cp.use_ends_at.isoformat() if getattr(cp, "use_ends_at", None) else None,
+            },
+        )
+    return {"ok": True, "used_at": now.isoformat()}
 
 
 @api_router.post("/public/coupon/{token}/use")
@@ -826,7 +986,12 @@ def use_public_coupon_issue(
     issue = session.exec(select(CouponIssue).where(CouponIssue.token == t)).first()
     if not issue:
         raise HTTPException(status_code=404, detail="not found")
+    cp = session.get(Coupon, issue.coupon_id)
+    if not cp:
+        raise HTTPException(status_code=404, detail="not found")
     now = datetime.now(timezone.utc)
+    if not _in_period(now, getattr(cp, "issue_starts_at", None), getattr(cp, "use_ends_at", None)):
+        raise HTTPException(status_code=404, detail="not found")
     if issue.used_at is None:
         issue.used_at = now
         session.add(issue)
@@ -871,6 +1036,7 @@ def create_campaign(
         data["tenant_id"] = tid
     data["lp_background_key"] = _normalize_lp_background_key(data.get("lp_background_key"))
     data["vote_max_products"] = _clamp_vote_max_products(data.get("vote_max_products"))
+    _validate_period(data.get("starts_at"), data.get("ends_at"), "campaign")
     row = Campaign(**data, created_at=now, updated_at=now)
     session.add(row)
     session.flush()
@@ -899,6 +1065,12 @@ def update_campaign(
         data["lp_background_key"] = _normalize_lp_background_key(str(data["lp_background_key"]))
     if "vote_max_products" in data and data["vote_max_products"] is not None:
         data["vote_max_products"] = _clamp_vote_max_products(int(data["vote_max_products"]))
+    if "starts_at" in data or "ends_at" in data:
+        _validate_period(
+            data.get("starts_at", getattr(row, "starts_at", None)),
+            data.get("ends_at", getattr(row, "ends_at", None)),
+            "campaign",
+        )
     if "products_json" in data and data["products_json"] is not None:
         try:
             products_list = json.loads(data["products_json"] or "[]")
@@ -1045,6 +1217,8 @@ def create_coupon(
     campaign_id_val = _validate_coupon_campaign_link(session, tid, payload.campaign_id)
 
     now = datetime.now(timezone.utc)
+    _validate_period(payload.issue_starts_at, payload.use_ends_at, "coupon")
+    test_token = _mint_unique_coupon_test_token(session)
     row = Coupon(
         tenant_id=tid,
         campaign_id=campaign_id_val,
@@ -1052,11 +1226,21 @@ def create_coupon(
         image_url=img,
         description=desc,
         lp_title=lp_title,
+        issue_starts_at=payload.issue_starts_at,
+        use_ends_at=payload.use_ends_at,
+        test_token=test_token,
         created_at=now,
         updated_at=now,
     )
     session.add(row)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        # extremely unlikely race; retry once with a new token
+        session.rollback()
+        row.test_token = _mint_unique_coupon_test_token(session)
+        session.add(row)
+        session.commit()
     session.refresh(row)
     return row
 
@@ -1072,6 +1256,17 @@ def get_coupon(
         raise HTTPException(status_code=404, detail="not found")
     _assert_coupon_access(row, user)
     _assert_tenant_coupons_feature(session, row.tenant_id, user)
+    if not getattr(row, "test_token", None):
+        for _ in range(10):
+            row.test_token = _mint_unique_coupon_test_token(session)
+            row.updated_at = datetime.now(timezone.utc)
+            try:
+                session.add(row)
+                session.commit()
+                session.refresh(row)
+                break
+            except IntegrityError:
+                session.rollback()
     return row
 
 
@@ -1129,6 +1324,12 @@ def update_coupon(
     _assert_tenant_coupons_feature(session, row.tenant_id, user)
 
     data = payload.model_dump(exclude_unset=True)
+    if "issue_starts_at" in data or "use_ends_at" in data:
+        _validate_period(
+            data.get("issue_starts_at", getattr(row, "issue_starts_at", None)),
+            data.get("use_ends_at", getattr(row, "use_ends_at", None)),
+            "coupon",
+        )
     if "tenant_id" in data:
         if user.role != "sysadmin":
             data.pop("tenant_id", None)

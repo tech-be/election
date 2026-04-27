@@ -27,6 +27,8 @@ export function CouponCreatePanel({
   const [lpTitle, setLpTitle] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [description, setDescription] = useState("");
+  const [issueStartsAt, setIssueStartsAt] = useState("");
+  const [useEndsAt, setUseEndsAt] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -42,6 +44,12 @@ export function CouponCreatePanel({
     }
     return campaigns;
   }, [role, tenantIdForCreate, campaigns]);
+
+  const selectedCampaignNum = campaignLinkId ? Number(campaignLinkId) : NaN;
+  const selectedCampaign = useMemo(() => {
+    if (!Number.isFinite(selectedCampaignNum)) return null;
+    return campaigns.find((c) => c.id === selectedCampaignNum) ?? null;
+  }, [campaigns, selectedCampaignNum]);
 
   useEffect(() => {
     setMounted(true);
@@ -172,6 +180,46 @@ export function CouponCreatePanel({
           />
         </label>
 
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block text-sm text-slate-200">
+            発行開始日
+            <input
+              type="datetime-local"
+              className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+              value={issueStartsAt}
+              onChange={(e) => setIssueStartsAt(e.target.value)}
+            />
+            <p className="mt-1 text-xs text-slate-500">未設定なら制限なし。</p>
+          </label>
+          <label className="block text-sm text-slate-200">
+            利用終了日
+            <input
+              type="datetime-local"
+              className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+              value={useEndsAt}
+              onChange={(e) => setUseEndsAt(e.target.value)}
+            />
+            <p className="mt-1 text-xs text-slate-500">未設定なら終了なし。</p>
+          </label>
+        </div>
+        <div className="-mt-1">
+          <button
+            type="button"
+            disabled={!token || !campaignLinkId || !selectedCampaign}
+            className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => {
+              if (!selectedCampaign) return;
+              setIssueStartsAt(selectedCampaign.starts_at ? String(selectedCampaign.starts_at).slice(0, 16) : "");
+              setUseEndsAt(selectedCampaign.ends_at ? String(selectedCampaign.ends_at).slice(0, 16) : "");
+            }}
+          >
+            企画の期間と同一にする
+          </button>
+          {!campaignLinkId ? (
+            <div className="mt-1 text-[11px] text-slate-500">「連動する企画」を選択すると利用できます。</div>
+          ) : null}
+        </div>
+
         <label className="block text-sm text-slate-200">
           クーポン画面のタイトル
           <input
@@ -274,6 +322,8 @@ export function CouponCreatePanel({
                   image_url: imageUrl.trim() ? imageUrl : null,
                   description: description.trim() ? description.trim() : null,
                   campaign_id: campaignLinkId ? Number(campaignLinkId) : null,
+                  issue_starts_at: issueStartsAt.trim() ? new Date(issueStartsAt).toISOString() : null,
+                  use_ends_at: useEndsAt.trim() ? new Date(useEndsAt).toISOString() : null,
                 };
                 if (role === "sysadmin") body.tenant_id = Number(tenantIdForCreate);
                 const created = await apiPost<Coupon>("/admin/coupons", body, {

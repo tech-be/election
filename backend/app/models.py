@@ -70,6 +70,9 @@ class CampaignBase(SQLModel):
     vote_confirm_body: Optional[str] = None
     # 投票時にメールアドレス入力を必須にするか
     email_required: bool = Field(default=True)
+    # 公開LPの開催期間（未設定なら常に公開）
+    starts_at: Optional[datetime] = Field(default=None)
+    ends_at: Optional[datetime] = Field(default=None)
 
 
 class Campaign(CampaignBase, table=True):
@@ -119,6 +122,8 @@ class CampaignUpdate(SQLModel):
     vote_confirm_title: Optional[str] = Field(default=None, max_length=200)
     vote_confirm_body: Optional[str] = None
     email_required: Optional[bool] = None
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
 
 
 class Vote(SQLModel, table=True):
@@ -153,6 +158,11 @@ class Coupon(SQLModel, table=True):
     description: Optional[str] = None
     # 公開クーポン LP の見出し（未設定時はフロントのデフォルト文言を表示）
     lp_title: Optional[str] = Field(default=None, max_length=200)
+    # 発行開始日 / 利用終了日（未設定なら制限なし）
+    issue_starts_at: Optional[datetime] = Field(default=None)
+    use_ends_at: Optional[datetime] = Field(default=None)
+    # 管理画面向けのテスト用クーポンURLトークン（期間内のみ有効）
+    test_token: Optional[str] = Field(default=None, max_length=64, unique=True, index=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -162,6 +172,9 @@ class CouponCreate(SQLModel):
     image_url: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = None
     lp_title: Optional[str] = Field(default=None, max_length=200)
+    issue_starts_at: Optional[datetime] = None
+    use_ends_at: Optional[datetime] = None
+    test_token: Optional[str] = None
     tenant_id: Optional[int] = None
     campaign_id: Optional[int] = None
 
@@ -171,6 +184,9 @@ class CouponUpdate(SQLModel):
     image_url: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = None
     lp_title: Optional[str] = Field(default=None, max_length=200)
+    issue_starts_at: Optional[datetime] = None
+    use_ends_at: Optional[datetime] = None
+    test_token: Optional[str] = None
     tenant_id: Optional[int] = None
     campaign_id: Optional[int] = None
 

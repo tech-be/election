@@ -31,7 +31,7 @@ function CouponLpShell({
   );
 }
 
-export default function CouponIssueLpPage() {
+export default function CouponTestIssueLpPage() {
   const params = useParams<{ token: string }>();
   const raw = params?.token;
   const token = typeof raw === "string" ? raw : "";
@@ -41,6 +41,7 @@ export default function CouponIssueLpPage() {
   const [outOfPeriod, setOutOfPeriod] = useState<{ start: string; end: string } | null>(null);
   const [useSubmitting, setUseSubmitting] = useState(false);
   const [useError, setUseError] = useState<string | null>(null);
+  const [testUsedAt, setTestUsedAt] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -49,7 +50,7 @@ export default function CouponIssueLpPage() {
     try {
       const { res, data } = await apiGetWithStatus<
         PublicCouponIssue | { detail?: { code?: string; starts_at?: string | null; ends_at?: string | null } }
-      >(`/public/coupon/${encodeURIComponent(token)}`);
+      >(`/public/coupon-test/${encodeURIComponent(token)}`);
       if (!res.ok) {
         const d = (data as { detail?: { code?: string; starts_at?: string | null; ends_at?: string | null } }).detail;
         if (res.status === 403 && d?.code === "out_of_period") {
@@ -73,21 +74,22 @@ export default function CouponIssueLpPage() {
   }, [load]);
 
   const onUse = useCallback(async () => {
-    if (!token || !data || data.used) return;
+    if (!token || !data || testUsedAt) return;
     setUseSubmitting(true);
     setUseError(null);
     try {
-      await apiPost<{ ok: boolean; used_at?: string | null }>(
-        `/public/coupon/${encodeURIComponent(token)}/use`,
+      const res = await apiPost<{ ok: boolean; used_at?: string | null }>(
+        `/public/coupon-test/${encodeURIComponent(token)}/use`,
         {},
       );
-      await load();
+      if (res.used_at) setTestUsedAt(res.used_at);
+      else setTestUsedAt(new Date().toISOString());
     } catch {
       setUseError("利用の記録に失敗しました。時間をおいて再度お試しください。");
     } finally {
       setUseSubmitting(false);
     }
-  }, [token, data, load]);
+  }, [token, data, testUsedAt]);
 
   if (!token) {
     return (
@@ -139,17 +141,18 @@ export default function CouponIssueLpPage() {
     <CouponLpShell narrow>
       <div className="space-y-5">
         <section className="rounded-[1.75rem] border border-white/80 bg-white/80 p-6 shadow-[0_20px_60px_rgba(167,139,250,0.12)] backdrop-blur-md">
-          {data.used ? (
+          {testUsedAt ? (
             <div
               className="mb-6 rounded-[1.5rem] border border-emerald-200/70 bg-gradient-to-br from-emerald-50/95 to-teal-50/90 px-5 py-5 text-center shadow-[0_16px_48px_rgba(52,211,153,0.15)]"
               role="status"
             >
-              <p className="text-base font-extrabold text-emerald-900">このクーポンは利用済みです 🎉</p>
-              {data.used_at ? (
-                <p className="mt-2 text-xs font-medium text-emerald-800/85">
-                  {new Date(data.used_at).toLocaleString("ja-JP")}
-                </p>
-              ) : null}
+              <p className="text-base font-extrabold text-emerald-900">（テスト）利用しました</p>
+              <p className="mt-2 text-xs font-medium text-emerald-800/85">
+                {new Date(testUsedAt).toLocaleString("ja-JP")}
+              </p>
+              <p className="mt-2 text-[11px] font-medium text-emerald-900/70">
+                ※テスト用のため、DBには保存されません
+              </p>
             </div>
           ) : null}
 
@@ -180,14 +183,8 @@ export default function CouponIssueLpPage() {
           ) : (
             <p className="text-base font-medium text-slate-500">説明はありません。</p>
           )}
-          <div className="mt-6 border-t border-violet-200/50 pt-6">
-            <p className="text-[11px] font-extrabold uppercase tracking-[0.15em] text-violet-500/90">
-              対象のメールアドレス
-            </p>
-            <p className="mt-2 break-all font-mono text-sm font-medium text-violet-950/90">{data.email}</p>
-          </div>
 
-          {!data.used ? (
+          {!testUsedAt ? (
             <div className="mt-8 space-y-4 border-t border-slate-200/60 pt-8">
               {useError ? (
                 <p className="text-center text-sm font-medium text-rose-600" role="alert">
@@ -200,12 +197,12 @@ export default function CouponIssueLpPage() {
                 onClick={() => void onUse()}
                 className="w-full rounded-[1.25rem] bg-gradient-to-r from-pink-400 via-fuchsia-500 to-violet-600 px-4 py-4 text-base font-extrabold text-white shadow-[0_20px_50px_rgba(192,38,211,0.35)] transition hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {useSubmitting ? "処理中…" : "利用する"}
+                {useSubmitting ? "処理中…" : "利用する（テスト）"}
               </button>
               <p className="text-center text-xs font-medium leading-relaxed text-slate-600/90">
                 店舗・会場で提示する際に押してください。
                 <br />
-                <span className="text-slate-500">利用済みになると再度は使えません。</span>
+                <span className="text-slate-500">※テスト用のため、DBには保存されません。</span>
               </p>
             </div>
           ) : null}
@@ -214,3 +211,4 @@ export default function CouponIssueLpPage() {
     </CouponLpShell>
   );
 }
+
