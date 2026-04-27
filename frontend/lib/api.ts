@@ -35,6 +35,8 @@ export type Campaign = {
   vote_confirm_title?: string | null;
   vote_confirm_body?: string | null;
   email_required?: boolean;
+  starts_at?: string | null;
+  ends_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -62,6 +64,11 @@ export type Coupon = {
   description?: string | null;
   /** 公開 LP 見出し（未設定時は COUPON_LP_DEFAULT_TITLE を表示） */
   lp_title?: string | null;
+  /** 発行開始日 / 利用終了日（未設定なら制限なし） */
+  issue_starts_at?: string | null;
+  use_ends_at?: string | null;
+  /** 管理画面向けテスト用トークン */
+  test_token?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -106,6 +113,30 @@ export async function apiPostWithStatus<T>(
       ...(init?.headers ?? {}),
     },
     body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data = {} as T;
+  if (text) {
+    try {
+      data = JSON.parse(text) as T;
+    } catch {
+      data = {} as T;
+    }
+  }
+  return { res, data };
+}
+
+export async function apiGetWithStatus<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<{ res: Response; data: T }> {
+  const res = await fetch(apiUrl(path), {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+    cache: "no-store",
   });
   const text = await res.text();
   let data = {} as T;

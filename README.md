@@ -109,7 +109,7 @@ docker compose -f docker-compose.prod.yml down
 ## 管理画面
 
 - ログイン: `http://localhost:3001/admin/login`
-- 初期パスワード: `admin`
+- 初期パスワード: `Narashino#55`
   - `docker-compose.yml` の `backend.environment.ADMIN_PASSWORD` で変更できます
 
 ## 企画（Campaign）

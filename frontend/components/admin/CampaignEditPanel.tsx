@@ -56,6 +56,8 @@ export function CampaignEditPanel({
   const [voteConfirmTitle, setVoteConfirmTitle] = useState("");
   const [voteConfirmBody, setVoteConfirmBody] = useState("");
   const [emailRequired, setEmailRequired] = useState(true);
+  const [startsAt, setStartsAt] = useState("");
+  const [endsAt, setEndsAt] = useState("");
 
   const [keyVisualUploading, setKeyVisualUploading] = useState(false);
   const [keyVisualInputNonce, setKeyVisualInputNonce] = useState(0);
@@ -91,7 +93,9 @@ export function CampaignEditPanel({
       setLoading(true);
       setError(null);
       try {
-        const c = await apiGet<Campaign>(`/campaigns/${encodeURIComponent(code)}`);
+        const c = await apiGet<Campaign>(`/admin/campaigns/${encodeURIComponent(code)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
         setName(c.name ?? "");
         setKeyVisualUrl(c.key_visual_url ?? "");
         setKeyText(c.key_text ?? "");
@@ -107,6 +111,8 @@ export function CampaignEditPanel({
         setVoteConfirmTitle(c.vote_confirm_title ?? "");
         setVoteConfirmBody(c.vote_confirm_body ?? "");
         setEmailRequired(c.email_required ?? true);
+        setStartsAt(c.starts_at ? String(c.starts_at).slice(0, 16) : "");
+        setEndsAt(c.ends_at ? String(c.ends_at).slice(0, 16) : "");
       } catch {
         setError("取得に失敗しました");
       } finally {
@@ -139,6 +145,8 @@ export function CampaignEditPanel({
             vote_confirm_title: voteConfirmTitle.trim() ? voteConfirmTitle.trim() : null,
             vote_confirm_body: voteConfirmBody.trim() ? voteConfirmBody.trim() : null,
             email_required: emailRequired,
+            starts_at: startsAt.trim() ? new Date(startsAt).toISOString() : null,
+            ends_at: endsAt.trim() ? new Date(endsAt).toISOString() : null,
           },
           { headers: { Authorization: `Bearer ${token}` } },
         );
@@ -169,6 +177,8 @@ export function CampaignEditPanel({
       voteConfirmTitle,
       voteConfirmBody,
       emailRequired,
+      startsAt,
+      endsAt,
       onClose,
       onSaved,
     ],
@@ -229,6 +239,29 @@ export function CampaignEditPanel({
                 onChange={(e) => setName(e.target.value)}
               />
             </label>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="text-sm text-slate-200">
+                開始日時（公開開始）
+                <input
+                  type="datetime-local"
+                  className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+                  value={startsAt}
+                  onChange={(e) => setStartsAt(e.target.value)}
+                />
+                <p className="mt-1 text-xs text-slate-500">未設定なら常に公開。</p>
+              </label>
+              <label className="text-sm text-slate-200">
+                終了日時（公開終了）
+                <input
+                  type="datetime-local"
+                  className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+                  value={endsAt}
+                  onChange={(e) => setEndsAt(e.target.value)}
+                />
+                <p className="mt-1 text-xs text-slate-500">未設定なら終了なし。</p>
+              </label>
+            </div>
 
             <label className="text-sm text-slate-200">
               投票で選べるアイテムの最大数
