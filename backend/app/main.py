@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import delete, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -109,8 +109,10 @@ def _campaign_products_to_json_list(session: Session, campaign_id: int) -> list[
 
 def _sync_campaign_products_from_list(session: Session, campaign_id: int, products_list: list) -> None:
     # replace strategy (keeps semantics consistent with current UI / products_json)
-    for p in session.exec(select(CampaignProduct).where(CampaignProduct.campaign_id == campaign_id)).all():
-        session.delete(p)
+    # IMPORTANT: Ensure DELETE is executed before INSERT to avoid unique violations
+    # on (campaign_id, index) due to flush ordering.
+    session.exec(delete(CampaignProduct).where(CampaignProduct.campaign_id == campaign_id))
+    session.flush()
 
     for idx, raw in enumerate(products_list):
         if isinstance(raw, dict):
@@ -131,6 +133,18 @@ def _sync_campaign_products_from_list(session: Session, campaign_id: int, produc
             desc = None
             i1 = i2 = i3 = None
             sort_id = None
+
+        # guard DB constraints (avoid 500 on DataError)
+        if len(name) > 200:
+            raise HTTPException(status_code=400, detail="product name too long (max 200)")
+        if i1 is not None and len(i1) > 500:
+            raise HTTPException(status_code=400, detail="image1Url too long (max 500)")
+        if i2 is not None and len(i2) > 500:
+            raise HTTPException(status_code=400, detail="image2Url too long (max 500)")
+        if i3 is not None and len(i3) > 500:
+            raise HTTPException(status_code=400, detail="image3Url too long (max 500)")
+        if sort_id is not None and len(sort_id) > 64:
+            raise HTTPException(status_code=400, detail="sortId too long (max 64)")
 
         session.add(
             CampaignProduct(
