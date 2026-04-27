@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -16,11 +17,33 @@ export default function AdminLoginPage() {
     <div className="min-h-screen px-4 py-10">
     <main className="mx-auto max-w-md space-y-6">
       <header className="space-y-2">
-        <div className="text-xs text-slate-400">管理画面</div>
-        <h1 className="text-2xl font-semibold tracking-tight">ログイン</h1>
+        <div className="flex items-center justify-center">
+          <div className="flex items-center gap-3 rounded-2xl bg-slate-900/40 px-4 py-3">
+            <div className="relative h-11 w-11 overflow-hidden rounded-xl bg-slate-950 ring-1 ring-slate-800">
+              <Image
+                src="/icon.png"
+                alt="Aquirise"
+                fill
+                sizes="44px"
+                className="object-cover"
+                priority
+              />
+            </div>
+            <div className="leading-tight">
+              <div className="flex items-baseline gap-2">
+                <div className="text-3xl font-semibold tracking-[0.08em] text-slate-50">Aquirise</div>
+                <div className="text-xs font-medium tracking-wide text-slate-300">アキライズ</div>
+              </div>
+              <div className="mt-1 text-xs leading-snug text-slate-300">
+                『選ぶ』を『絆』に変えるリワード型エンゲージメント
+              </div>
+            </div>
+          </div>
+        </div>
       </header>
 
       <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
+        <h1 className="mb-4 text-lg font-semibold tracking-tight text-slate-200">ログイン</h1>
         <label className="block text-sm text-slate-200">
           メールアドレス
           <input
