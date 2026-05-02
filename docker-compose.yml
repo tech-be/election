@@ -14,7 +14,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://funsite:funsite@db:5432/funsite
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
-      ADMIN_PASSWORD: admin
+      ADMIN_PASSWORD: Narashino#55
     ports:
       - "8001:8000"
     volumes:

@@ -153,7 +153,10 @@ export function ProductModal({
   const uploadImage = useCallback(
     async (file: File): Promise<string> => {
       if (!token) throw new Error("not logged in");
-      const base = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
+      const base =
+        (process.env.NEXT_PUBLIC_API_BASE_URL && process.env.NEXT_PUBLIC_API_BASE_URL.trim()) ||
+        (typeof window !== "undefined" && window.location ? window.location.origin : "") ||
+        "http://localhost:8001";
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch(`${base}/api/admin/uploads`, {

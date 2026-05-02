@@ -6,7 +6,7 @@ import { LpIntroModal } from "../../components/lp/LpIntroModal";
 import { PopDecorations } from "../../components/lp/PopDecorations";
 import { lpFont } from "../lpFont";
 import { lpBackgroundClassName } from "../../lib/lpBackgrounds";
-import { apiGet, type Campaign } from "../../lib/api";
+import { apiGetWithStatus, type Campaign } from "../../lib/api";
 import { parseProductsJson, resolveMediaUrl } from "../../lib/products";
 import { requiredVoteSelections } from "../../lib/voteSelection";
 
@@ -31,7 +31,30 @@ export default async function CampaignLp({
   if (RESERVED_CAMPAIGN_CODES.has(code.toLowerCase())) {
     notFound();
   }
-  const c = await apiGet<Campaign>(`/campaigns/${encodeURIComponent(code)}`);
+  const { res, data } = await apiGetWithStatus<
+    Campaign | { detail?: { code?: string; starts_at?: string | null; ends_at?: string | null } }
+  >(`/campaigns/${encodeURIComponent(code)}`);
+  if (!res.ok) {
+    const d = (data as { detail?: { code?: string; starts_at?: string | null; ends_at?: string | null } }).detail;
+    if (res.status === 403 && d?.code === "out_of_period") {
+      const start = d.starts_at ? new Date(d.starts_at).toLocaleString("ja-JP") : "未設定";
+      const end = d.ends_at ? new Date(d.ends_at).toLocaleString("ja-JP") : "未設定";
+      return (
+        <div className={`${lpFont.className} ${lpBackgroundClassName("pastel_lavender")} min-h-screen`}>
+          <div className="mx-auto flex min-h-screen max-w-3xl items-center justify-center px-6">
+            <div className="rounded-3xl border border-slate-200/80 bg-white/85 px-10 py-12 text-center shadow-[0_24px_80px_rgba(15,23,42,0.12)] backdrop-blur">
+              <div className="text-2xl font-extrabold tracking-tight text-slate-900">期間外です。</div>
+              <div className="mt-3 whitespace-pre-wrap font-mono text-sm text-slate-600">
+                （{start}〜{end}）
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    notFound();
+  }
+  const c = data as Campaign;
 
   const products = parseProductsJson(c.products_json);
   const pickCount = requiredVoteSelections(c.vote_max_products, products.length);
@@ -56,13 +79,7 @@ export default async function CampaignLp({
               <p className="mx-auto max-w-2xl whitespace-pre-wrap text-center text-base leading-relaxed text-slate-700 sm:text-lg">
                 {c.key_text}
               </p>
-            ) : (
-              <p className="text-sm text-slate-500">
-                {products.length === 0
-                  ? "アイテムが登録されると投票できます。"
-                  : `気になるアイテムを${pickCount}件選んで投票しよう。`}
-              </p>
-            )}
+            ) : null}
           </header>
 
       {keyVisualSrc ? (
@@ -100,6 +117,7 @@ export default async function CampaignLp({
           noLandingEndMessage={c.no_landing_end_message}
           voteConfirmTitle={c.vote_confirm_title ?? null}
           voteConfirmBody={c.vote_confirm_body ?? null}
+          emailRequired={c.email_required ?? true}
         />
       </section>
         </main>

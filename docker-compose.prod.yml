@@ -1,21 +1,4 @@
 services:
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      DOMAIN: ${DOMAIN}
-      CADDY_EMAIL: ${CADDY_EMAIL}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - frontend
-      - backend
-
   db:
     image: postgres:16
     restart: unless-stopped
@@ -35,6 +18,8 @@ services:
       # CORS must include your HTTPS origin(s)
       CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
+    ports:
+      - "8001:8000"
     volumes:
       - uploads:/data/uploads
     depends_on:
@@ -49,12 +34,12 @@ services:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?set NEXT_PUBLIC_API_BASE_URL}
       # Internal URL used by server components/actions inside the container network
       API_INTERNAL_BASE_URL: ${API_INTERNAL_BASE_URL:-http://backend:8000}
+    ports:
+      - "3001:3000"
     depends_on:
       - backend
 
 volumes:
   postgres_data:
   uploads:
-  caddy_data:
-  caddy_config:
 

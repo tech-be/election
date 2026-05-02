@@ -34,6 +34,9 @@ export type Campaign = {
   vote_max_products?: number;
   vote_confirm_title?: string | null;
   vote_confirm_body?: string | null;
+  email_required?: boolean;
+  starts_at?: string | null;
+  ends_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -61,6 +64,11 @@ export type Coupon = {
   description?: string | null;
   /** 公開 LP 見出し（未設定時は COUPON_LP_DEFAULT_TITLE を表示） */
   lp_title?: string | null;
+  /** 発行開始日 / 利用終了日（未設定なら制限なし） */
+  issue_starts_at?: string | null;
+  use_ends_at?: string | null;
+  /** 管理画面向けテスト用トークン */
+  test_token?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -118,13 +126,46 @@ export async function apiPostWithStatus<T>(
   return { res, data };
 }
 
+export async function apiGetWithStatus<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<{ res: Response; data: T }> {
+  const res = await fetch(apiUrl(path), {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+    cache: "no-store",
+  });
+  const text = await res.text();
+  let data = {} as T;
+  if (text) {
+    try {
+      data = JSON.parse(text) as T;
+    } catch {
+      data = {} as T;
+    }
+  }
+  return { res, data };
+}
+
 function baseUrl(): string {
   // Server-side (Node in container) must use docker network.
   if (typeof window === "undefined") {
     return process.env.API_INTERNAL_BASE_URL ?? "http://backend:8000";
   }
   // Client-side uses host-mapped URL.
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
+  // NOTE: In Next.js, NEXT_PUBLIC_* is embedded at build-time into the client bundle.
+  // If it's missing during build, using a localhost fallback breaks production.
+  // Prefer same-origin when available.
+  const explicit = process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (explicit && explicit.trim()) return explicit.trim();
+  if (typeof window !== "undefined" && window.location && window.location.origin) {
+    const origin = window.location.origin;
+    if (origin && !origin.includes("localhost")) return origin;
+  }
+  return "http://localhost:8001";
 }
 
 /** Backend API のパスプレフィックス（`/uploads` など静的配信は含まない） */

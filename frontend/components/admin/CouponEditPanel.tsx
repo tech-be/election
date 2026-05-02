@@ -32,6 +32,8 @@ export function CouponEditPanel({
   const [lpTitle, setLpTitle] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [description, setDescription] = useState("");
+  const [issueStartsAt, setIssueStartsAt] = useState("");
+  const [useEndsAt, setUseEndsAt] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -40,6 +42,7 @@ export function CouponEditPanel({
   const [fileInputNonce, setFileInputNonce] = useState(0);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignLinkId, setCampaignLinkId] = useState("");
+  const [testToken, setTestToken] = useState<string>("");
 
   const effectiveTenantId = tenantId.length > 0 ? Number(tenantId) : NaN;
   const filteredCampaigns = useMemo(() => {
@@ -93,6 +96,9 @@ export function CouponEditPanel({
         setLpTitle(c.lp_title ?? "");
         setImageUrl(c.image_url ?? "");
         setDescription(c.description ?? "");
+        setIssueStartsAt(c.issue_starts_at ? String(c.issue_starts_at).slice(0, 16) : "");
+        setUseEndsAt(c.use_ends_at ? String(c.use_ends_at).slice(0, 16) : "");
+        setTestToken(c.test_token ?? "");
         setTenantId(String(c.tenant_id));
         setCampaignLinkId(c.campaign_id != null ? String(c.campaign_id) : "");
       } catch {
@@ -106,7 +112,10 @@ export function CouponEditPanel({
   const uploadImage = useCallback(
     async (file: File) => {
       if (!token) throw new Error("not logged in");
-      const base = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
+      const base =
+        (process.env.NEXT_PUBLIC_API_BASE_URL && process.env.NEXT_PUBLIC_API_BASE_URL.trim()) ||
+        (typeof window !== "undefined" && window.location ? window.location.origin : "") ||
+        "http://localhost:8001";
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch(`${base}/api/admin/uploads`, {
@@ -127,6 +136,10 @@ export function CouponEditPanel({
   const orphanCampaignSelected =
     Number.isFinite(selectedCampaignNum) &&
     !filteredCampaigns.some((c) => c.id === selectedCampaignNum);
+  const selectedCampaign = useMemo(() => {
+    if (!Number.isFinite(selectedCampaignNum)) return null;
+    return campaigns.find((c) => c.id === selectedCampaignNum) ?? null;
+  }, [campaigns, selectedCampaignNum]);
 
   return (
     <div className="space-y-6">
@@ -163,6 +176,16 @@ export function CouponEditPanel({
               >
                 LPテスト表示
               </Link>
+              {testToken ? (
+                <Link
+                  className="rounded-xl border border-indigo-700/60 bg-indigo-950/20 px-3 py-2 text-xs font-semibold text-indigo-100 hover:border-indigo-500"
+                  href={`/coupon-test/${encodeURIComponent(testToken)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  テスト用クーポンURL
+                </Link>
+              ) : null}
               {showBackToList ? (
                 <Link
                   className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 hover:border-slate-500"
@@ -225,6 +248,46 @@ export function CouponEditPanel({
               placeholder="例：春のお得クーポン"
             />
           </label>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="block text-sm text-slate-200">
+              発行開始日
+              <input
+                type="datetime-local"
+                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+                value={issueStartsAt}
+                onChange={(e) => setIssueStartsAt(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-slate-500">未設定なら制限なし。</p>
+            </label>
+            <label className="block text-sm text-slate-200">
+              利用終了日
+              <input
+                type="datetime-local"
+                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+                value={useEndsAt}
+                onChange={(e) => setUseEndsAt(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-slate-500">未設定なら終了なし。</p>
+            </label>
+          </div>
+          <div className="-mt-1">
+            <button
+              type="button"
+              disabled={!token || !campaignLinkId || !selectedCampaign}
+              className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => {
+                if (!selectedCampaign) return;
+                setIssueStartsAt(selectedCampaign.starts_at ? String(selectedCampaign.starts_at).slice(0, 16) : "");
+                setUseEndsAt(selectedCampaign.ends_at ? String(selectedCampaign.ends_at).slice(0, 16) : "");
+              }}
+            >
+              企画の期間と同一にする
+            </button>
+            {!campaignLinkId ? (
+              <div className="mt-1 text-[11px] text-slate-500">「連動する企画」を選択すると利用できます。</div>
+            ) : null}
+          </div>
 
           <label className="block text-sm text-slate-200">
             クーポン画面のタイトル
@@ -337,6 +400,8 @@ export function CouponEditPanel({
                     image_url: imageUrl.trim() ? imageUrl : null,
                     description: description.trim() ? description.trim() : null,
                     campaign_id: campaignLinkId ? Number(campaignLinkId) : null,
+                    issue_starts_at: issueStartsAt.trim() ? new Date(issueStartsAt).toISOString() : null,
+                    use_ends_at: useEndsAt.trim() ? new Date(useEndsAt).toISOString() : null,
                   };
                   if (role === "sysadmin") body.tenant_id = Number(tenantId);
                   await apiPatch<Coupon>(`/admin/coupons/${couponId}`, body, {
