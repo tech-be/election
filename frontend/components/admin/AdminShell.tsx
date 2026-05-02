@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -48,8 +49,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [role, setRole] = useState<AdminRole>("");
   const [tenantScopeId, setTenantScopeId] = useState<number | null>(null);
-  /** テナント／ユーザ権限時のみ。クーポン機能が有効か（シスアドは未使用） */
-  const [tenantCouponsEnabled, setTenantCouponsEnabled] = useState<boolean | null>(null);
+  /** /auth/me のメール（ログイン識別子として表示） */
+  const [meEmail, setMeEmail] = useState<string | null>(null);
+  /** テナント／ユーザ権限時のみ /auth/me から */
+  const [tenantDisplayName, setTenantDisplayName] = useState<string | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -57,7 +60,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
   // ログイン直後の router.push では同一レイアウトのまま遷移するため、ルートが変わるたびに再同期する
   useEffect(() => {
-    setToken(localStorage.getItem("admin_token"));
+    const t = localStorage.getItem("admin_token");
+    setToken(t);
     const raw = (localStorage.getItem("admin_role") ?? "").trim().toLowerCase();
     if (raw === "sysadmin" || raw === "tenant" || raw === "user") {
       setRole(raw as AdminRole);
@@ -67,13 +71,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     const tidRaw = (localStorage.getItem("admin_tenant_id") ?? "").trim();
     const tid = tidRaw.length > 0 && /^\d+$/.test(tidRaw) ? Number(tidRaw) : null;
     setTenantScopeId(Number.isFinite(tid) ? tid : null);
-  }, [pathname]);
 
-  useEffect(() => {
-    const t = localStorage.getItem("admin_token");
-    const raw = (localStorage.getItem("admin_role") ?? "").trim().toLowerCase();
-    if (!t || raw === "sysadmin" || raw === "") {
-      setTenantCouponsEnabled(null);
+    if (!t) {
+      setMeEmail(null);
+      setTenantDisplayName(null);
       return;
     }
     void (async () => {
@@ -81,12 +82,19 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         const me = await apiGet<AuthMe>("/auth/me", {
           headers: { Authorization: `Bearer ${t}` },
         });
-        setTenantCouponsEnabled(me.tenant_coupons_enabled ?? false);
+        setMeEmail(me.email);
+        if (me.role === "sysadmin") {
+          setTenantDisplayName(null);
+        } else {
+          const tn = me.tenant_name;
+          setTenantDisplayName(typeof tn === "string" && tn.trim() ? tn.trim() : null);
+        }
       } catch {
-        setTenantCouponsEnabled(false);
+        setMeEmail(null);
+        setTenantDisplayName(null);
       }
     })();
-  }, [pathname, token]);
+  }, [pathname]);
 
   const nav = useMemo(() => {
     const items: Array<{ href: string; label: string }> = [];
@@ -100,11 +108,12 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     items.push({ href: "/admin/campaigns", label: "企画管理" });
     if (role === "sysadmin") {
       items.push({ href: "/admin/coupons", label: "クーポン管理" });
-    } else if ((role === "tenant" || role === "user") && tenantCouponsEnabled === true) {
+      items.push({ href: "/admin/inquiries", label: "問い合わせ確認" });
+    } else if (role === "tenant" || role === "user") {
       items.push({ href: "/admin/coupons", label: "クーポン管理" });
     }
     return items;
-  }, [role, tenantScopeId, tenantCouponsEnabled]);
+  }, [role, tenantScopeId]);
 
   const isLogin = pathname === "/admin/login";
   if (isLogin) return <>{children}</>;
@@ -113,13 +122,24 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen w-full flex-col lg:flex-row">
       <aside className="w-full shrink-0 border-slate-800 bg-slate-900/40 px-4 py-6 lg:w-[240px] lg:border-r lg:py-10 lg:pl-6 lg:pr-4">
         <div className="space-y-1">
-          <div className="text-xs text-slate-400">管理メニュー</div>
+          <div className="flex items-center gap-2.5">
+            <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-xl bg-slate-950 ring-1 ring-slate-800">
+              <Image src="/icon.png" alt="Aquirise" fill sizes="36px" className="object-cover" />
+            </div>
+            <span className="text-sm font-semibold tracking-wide text-slate-100">アキライズ</span>
+          </div>
+          {mounted && token && (role === "tenant" || role === "user") && tenantDisplayName ? (
+            <div className="break-words text-sm font-semibold leading-snug text-indigo-200">{tenantDisplayName}</div>
+          ) : null}
           <div className="text-sm font-semibold text-slate-100">{roleLabel(role)}</div>
+          {mounted && token && meEmail ? (
+            <div className="break-all text-xs leading-snug text-slate-400">{meEmail}</div>
+          ) : null}
           {mounted && !token ? (
             <div className="text-xs text-rose-300">未ログイン</div>
-          ) : (
-            <div className="text-xs text-slate-500">ログイン中</div>
-          )}
+          ) : mounted && token && !meEmail ? (
+            <div className="text-xs text-slate-500">読み込み中…</div>
+          ) : null}
         </div>
 
         <nav className="mt-4 space-y-2">

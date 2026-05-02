@@ -5,11 +5,15 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { CouponCreatePanel } from "../../../../components/admin/CouponCreatePanel";
+import { CouponFeatureDisabledNotice } from "../../../../components/admin/CouponFeatureDisabledNotice";
+import { useCouponAdminAccess } from "../../../../lib/useCouponAdminAccess";
 
 export default function AdminCouponNewPage() {
   const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
+
+  const couponAccess = useCouponAdminAccess(token, mounted);
 
   useEffect(() => {
     setMounted(true);
@@ -20,7 +24,6 @@ export default function AdminCouponNewPage() {
     <main className="w-full max-w-none space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="text-xs text-slate-400">管理画面</div>
           <h1 className="text-2xl font-semibold tracking-tight">クーポン新規登録</h1>
         </div>
         <Link
@@ -37,7 +40,17 @@ export default function AdminCouponNewPage() {
         </div>
       ) : null}
 
-      {mounted ? <CouponCreatePanel token={token} onClose={() => router.push("/admin/coupons")} /> : null}
+      {mounted && token && couponAccess === "loading" ? (
+        <div className="rounded-2xl border border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">
+          読み込み中…
+        </div>
+      ) : null}
+
+      {mounted && token && couponAccess === "disabled" ? <CouponFeatureDisabledNotice /> : null}
+
+      {mounted && couponAccess === "full" ? (
+        <CouponCreatePanel token={token} onClose={() => router.push("/admin/coupons")} />
+      ) : null}
     </main>
   );
 }

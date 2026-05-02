@@ -20,6 +20,9 @@ class Tenant(SQLModel, table=True):
     active: bool = Field(default=True)
     # シスアドがテナント単位でクーポン機能の利用を許可するか（無効時は当該テナント向け管理API・投票時の発行を停止）。既定は OFF。
     coupons_enabled: bool = Field(default=False)
+    # 任意（画面入力なし想定。シスアドAPIやDBで設定）
+    phone: Optional[str] = Field(default=None, max_length=64)
+    address: Optional[str] = Field(default=None, max_length=2000)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -204,4 +207,20 @@ class CouponIssue(SQLModel, table=True):
     email: str = Field(max_length=254)
     used_at: Optional[datetime] = Field(default=None)
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class Inquiry(SQLModel, table=True):
+    __tablename__ = "inquiries"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(default="", max_length=200)
+    email: str = Field(max_length=254, index=True)
+    message: str
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class InquiryCreate(SQLModel):
+    name: str = Field(default="", max_length=200)
+    email: str = Field(max_length=254)
+    message: str
 

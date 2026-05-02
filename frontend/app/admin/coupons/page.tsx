@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { apiDelete, apiGet, apiUrl, type Campaign, type Coupon } from "../../../lib/api";
+import { useCouponAdminAccess } from "../../../lib/useCouponAdminAccess";
 import { Modal } from "../../../components/admin/Modal";
 import { CouponEditPanel } from "../../../components/admin/CouponEditPanel";
 import { CouponCreatePanel } from "../../../components/admin/CouponCreatePanel";
+import { CouponFeatureDisabledNotice } from "../../../components/admin/CouponFeatureDisabledNotice";
 import { resolveMediaUrl } from "../../../lib/products";
 
 type TenantRow = { id: number; name: string };
@@ -24,6 +26,8 @@ export default function AdminCouponsPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [creatingOpen, setCreatingOpen] = useState(false);
 
+  const couponAccess = useCouponAdminAccess(token, mounted);
+
   useEffect(() => {
     setMounted(true);
     setToken(localStorage.getItem("admin_token"));
@@ -31,7 +35,7 @@ export default function AdminCouponsPage() {
   }, []);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || couponAccess !== "full") return;
     (async () => {
       setError(null);
       try {
@@ -43,10 +47,10 @@ export default function AdminCouponsPage() {
         setError("取得に失敗しました");
       }
     })();
-  }, [token]);
+  }, [token, couponAccess]);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || couponAccess !== "full") return;
     (async () => {
       try {
         const c = await apiGet<Campaign[]>("/admin/campaigns", {
@@ -57,10 +61,10 @@ export default function AdminCouponsPage() {
         setCampaigns([]);
       }
     })();
-  }, [token]);
+  }, [token, couponAccess]);
 
   useEffect(() => {
-    if (!token || role !== "sysadmin") return;
+    if (!token || role !== "sysadmin" || couponAccess !== "full") return;
     (async () => {
       try {
         const tenants = await apiGet<TenantRow[]>("/admin/tenants", {
@@ -73,7 +77,7 @@ export default function AdminCouponsPage() {
         setTenantNameById({});
       }
     })();
-  }, [token, role]);
+  }, [token, role, couponAccess]);
 
   function tenantDisplayName(tenantId: number): string {
     return tenantNameById[tenantId] ?? `（ID: ${tenantId}）`;
@@ -89,17 +93,18 @@ export default function AdminCouponsPage() {
     <main className="w-full max-w-none space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="text-xs text-slate-400">管理画面</div>
           <h1 className="text-2xl font-semibold tracking-tight">クーポン一覧</h1>
         </div>
-        <button
-          className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
-          type="button"
-          disabled={!token}
-          onClick={() => setCreatingOpen(true)}
-        >
-          新規登録
-        </button>
+        {couponAccess === "full" ? (
+          <button
+            className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
+            type="button"
+            disabled={!token}
+            onClick={() => setCreatingOpen(true)}
+          >
+            新規登録
+          </button>
+        ) : null}
       </header>
 
       {mounted && !token ? (
@@ -112,12 +117,21 @@ export default function AdminCouponsPage() {
         </div>
       ) : null}
 
-      {error ? (
+      {mounted && token && couponAccess === "loading" ? (
+        <div className="rounded-2xl border border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">
+          読み込み中…
+        </div>
+      ) : null}
+
+      {mounted && token && couponAccess === "disabled" ? <CouponFeatureDisabledNotice /> : null}
+
+      {couponAccess === "full" && error ? (
         <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
           {error}
         </div>
       ) : null}
 
+      {couponAccess === "full" ? (
       <section className="overflow-hidden rounded-2xl border border-slate-800">
         <div className="grid grid-cols-12 gap-0 bg-slate-900/50 px-4 py-3 text-xs text-slate-300">
           {role === "sysadmin" ? <div className="col-span-2">テナント</div> : null}
@@ -268,8 +282,9 @@ export default function AdminCouponsPage() {
           )}
         </div>
       </section>
+      ) : null}
 
-      {editingId != null && token ? (
+      {editingId != null && token && couponAccess === "full" ? (
         <Modal title="クーポン編集" maxWidthClassName="max-w-6xl" onClose={() => setEditingId(null)}>
           <CouponEditPanel
             couponId={editingId}
@@ -280,7 +295,7 @@ export default function AdminCouponsPage() {
         </Modal>
       ) : null}
 
-      {creatingOpen && token ? (
+      {creatingOpen && token && couponAccess === "full" ? (
         <Modal title="クーポン新規登録" maxWidthClassName="max-w-6xl" onClose={() => setCreatingOpen(false)}>
           <CouponCreatePanel
             token={token}
