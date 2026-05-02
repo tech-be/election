@@ -15,6 +15,15 @@ services:
       DATABASE_URL: postgresql+psycopg://funsite:funsite@db:5432/funsite
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
       ADMIN_PASSWORD: Narashino#55
+      # Mailgun SMTP（.env に記載。未設定なら /api/admin/mail/send は 503）
+      SMTP_HOST: ${SMTP_HOST:-smtp.mailgun.org}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      SMTP_USE_SSL: ${SMTP_USE_SSL:-false}
+      MAIL_FROM: ${MAIL_FROM:-}
+      SMTP_TIMEOUT: ${SMTP_TIMEOUT:-30}
     ports:
       - "8001:8000"
     volumes:

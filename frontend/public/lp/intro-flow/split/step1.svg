@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <radialGradient id="g" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 400) rotate(90) scale(520)">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="0.55" stop-color="#EAF4FF" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#DDEBFF" stop-opacity="0.75"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="256" y1="200" x2="768" y2="824" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#BFD7FF" stop-opacity="0.6"/>
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="26" stdDeviation="28" flood-color="#0F172A" flood-opacity="0.18"/>
+    </filter>
+    <filter id="inner" x="168" y="168" width="688" height="688" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="2.5" result="b"/>
+      <feComposite in="b" in2="SourceAlpha" operator="in" result="bi"/>
+      <feColorMatrix in="bi" type="matrix" values="0 0 0 0 0.12  0 0 0 0 0.25  0 0 0 0 0.45  0 0 0 0.18 0"/>
+      <feBlend in2="SourceGraphic" mode="multiply"/>
+    </filter>
+    <linearGradient id="shine" x1="340" y1="260" x2="660" y2="700" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.65"/>
+      <stop offset="0.35" stop-color="#FFFFFF" stop-opacity="0.0"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- badge -->
+  <g filter="url(#shadow)">
+    <circle cx="512" cy="500" r="320" fill="url(#g)"/>
+    <circle cx="512" cy="500" r="320" fill="url(#shine)"/>
+    <circle cx="512" cy="500" r="319" stroke="url(#rim)" stroke-width="10" opacity="0.9"/>
+    <circle cx="512" cy="500" r="304" stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="2"/>
+  </g>
+
+  <!-- glyph: document + pen -->
+  <g filter="url(#inner)" stroke="#475569" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M404 322h180l68 68v292c0 28-22 50-50 50H404c-28 0-50-22-50-50V372c0-28 22-50 50-50Z" fill="rgba(255,255,255,0.20)"/>
+    <path d="M584 322v92c0 16 13 30 30 30h88"/>
+    <path d="M420 470h168"/>
+    <path d="M420 534h140"/>
+    <path d="M420 598h120"/>
+    <path d="M612 540 720 432c14-14 37-14 51 0s14 37 0 51L663 591"/>
+    <path d="M612 540 585 647l106-27"/>
+  </g>
+</svg>

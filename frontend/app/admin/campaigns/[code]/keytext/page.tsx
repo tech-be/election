@@ -33,7 +33,6 @@ export default function AdminCampaignKeyTextPage() {
     <main className="space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="text-xs text-slate-400">管理画面</div>
           <h1 className="text-2xl font-semibold tracking-tight">KeyText</h1>
           <div className="mt-1 text-xs text-slate-400">
             企画コード: <span className="font-mono text-slate-200">{code}</span>

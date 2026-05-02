@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { apiDelete, apiGet, apiPatch, apiPost, type Tenant } from "../../lib/api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "../../lib/api";
 import { Modal } from "./Modal";
 
 type UserRow = {
@@ -25,7 +25,6 @@ export function TenantUsersPanel({
   token: string;
   viewerRole: string;
 }) {
-  const [tenantName, setTenantName] = useState<string | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -89,18 +88,11 @@ export function TenantUsersPanel({
       setLoading(true);
       setError(null);
       try {
-        const [tenantRes, rows] = await Promise.all([
-          apiGet<Tenant>(`/admin/tenants/${tenantId}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-          apiGet<UserRow[]>(`/admin/tenants/${tenantId}/users`, {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-        ]);
-        setTenantName(tenantRes.name ?? null);
+        const rows = await apiGet<UserRow[]>(`/admin/tenants/${tenantId}/users`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
         setUsers(rows);
       } catch {
-        setTenantName(null);
         setUsers([]);
         setError("取得に失敗しました（権限不足の可能性）");
       } finally {
@@ -112,25 +104,8 @@ export function TenantUsersPanel({
   return (
     <div className="space-y-6">
       <header className="space-y-1">
-        <div className="text-xs text-slate-400">
-          {viewerRole === "tenant" ? "管理画面（テナント権限）" : "管理画面（シスアド）"}
-        </div>
         <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="space-y-1">
-            <div className="text-lg font-semibold tracking-tight text-slate-100">テナント配下ユーザ</div>
-            <div className="text-sm font-medium leading-snug text-slate-200">
-              <span className="text-slate-400">テナント</span>{" "}
-              <span className="font-mono font-semibold tabular-nums text-indigo-200">#{tenantId}</span>
-              {tenantName ? (
-                <>
-                  <span className="mx-2 text-slate-500">—</span>
-                  <span className="font-semibold text-slate-100">{tenantName}</span>
-                </>
-              ) : loading ? (
-                <span className="ml-2 text-sm font-normal text-slate-500">（読み込み中…）</span>
-              ) : null}
-            </div>
-          </div>
+          <div className="text-lg font-semibold tracking-tight text-slate-100">テナント配下ユーザ</div>
 
           <button
             type="button"
@@ -165,8 +140,7 @@ export function TenantUsersPanel({
         ) : (
           <div className="overflow-hidden rounded-2xl border border-slate-800">
             <div className="grid grid-cols-12 gap-0 bg-slate-900/50 px-4 py-3 text-xs text-slate-300">
-              <div className="col-span-1">ID</div>
-              <div className="col-span-5">ユーザ名</div>
+              <div className="col-span-6">ユーザ名</div>
               <div className="col-span-2">権限</div>
               <div className="col-span-3">登録日時</div>
               <div className="col-span-1 text-right">操作</div>
@@ -174,8 +148,7 @@ export function TenantUsersPanel({
             <div className="divide-y divide-slate-800 bg-slate-950/40">
               {users.map((u) => (
                 <div key={u.id} className="grid grid-cols-12 items-center gap-0 px-4 py-3 text-sm">
-                  <div className="col-span-1 font-mono text-xs text-slate-300">{u.id}</div>
-                  <div className="col-span-5 min-w-0">
+                  <div className="col-span-6 min-w-0">
                     <div className="truncate font-medium text-slate-100" title={u.email}>
                       {u.email}
                     </div>

@@ -1,11 +1,14 @@
 import csv
 import io
 import json
+import logging
 import os
 import re
+import smtplib
 import uuid
 import hashlib
 import secrets
+import string
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
@@ -21,6 +24,7 @@ from sqlmodel import Session, select
 
 from app.auth import get_current_user, require_campaign_manager, require_sysadmin
 from app.db import get_session
+from app.mail_smtp import is_smtp_configured, send_smtp_message, smtp_settings
 from app.models import (
     Campaign,
     CampaignCreate,
@@ -30,12 +34,16 @@ from app.models import (
     CouponCreate,
     CouponIssue,
     CouponUpdate,
+    Inquiry,
+    InquiryCreate,
     SessionToken,
     Tenant,
     User,
     Vote,
     VoteItem,
 )
+
+logger = logging.getLogger(__name__)
 
 LP_BACKGROUND_KEYS = frozenset(
     ("pastel_lavender", "pastel_mint", "pastel_peach", "pastel_sky", "pastel_lemon"),
@@ -317,6 +325,26 @@ def hash_password(password: str) -> str:
     return f"pbkdf2_sha256$150000${salt.hex()}${dk.hex()}"
 
 
+def _generate_tenant_admin_password_12() -> str:
+    """12文字。英大文字・英小文字・数字・記号をそれぞれ1文字以上含む。"""
+    lowercase = string.ascii_lowercase
+    uppercase = string.ascii_uppercase
+    digits = string.digits
+    symbols = "!@#$%&*-_=+"
+    rng = secrets.SystemRandom()
+    chars = [
+        secrets.choice(lowercase),
+        secrets.choice(uppercase),
+        secrets.choice(digits),
+        secrets.choice(symbols),
+    ]
+    alphabet = lowercase + uppercase + digits + symbols
+    while len(chars) < 12:
+        chars.append(secrets.choice(alphabet))
+    rng.shuffle(chars)
+    return "".join(chars)
+
+
 def verify_password(password: str, stored: str) -> bool:
     try:
         scheme, iters_s, salt_hex, dk_hex = stored.split("$", 3)
@@ -340,8 +368,10 @@ def auth_me(
     if user.role in ("tenant", "user") and user.tenant_id is not None:
         tr = session.get(Tenant, user.tenant_id)
         out["tenant_coupons_enabled"] = bool(tr.coupons_enabled) if tr else False
+        out["tenant_name"] = tr.name if tr else None
     else:
         out["tenant_coupons_enabled"] = None
+        out["tenant_name"] = None
     return out
 
 
@@ -392,15 +422,47 @@ def patch_tenant(
     payload: dict,
     session: Annotated[Session, Depends(get_session)],
 ):
-    """テナント設定の更新（active / coupons_enabled）。"""
+    """テナント設定の更新（name / active / coupons_enabled / phone / address）。"""
     row = session.get(Tenant, tenant_id)
     if not row:
         raise HTTPException(status_code=404, detail="tenant not found")
     now = datetime.now(timezone.utc)
+    if "name" in payload:
+        nm = str(payload["name"] or "").strip()
+        if not nm:
+            raise HTTPException(status_code=400, detail="name required")
+        row.name = nm[:200]
     if "active" in payload:
         row.active = bool(payload["active"])
+    if "phone" in payload:
+        pv = payload["phone"]
+        if pv is None:
+            row.phone = None
+        else:
+            s = str(pv).strip()
+            row.phone = s[:64] if s else None
+    if "address" in payload:
+        av = payload["address"]
+        if av is None:
+            row.address = None
+        else:
+            s = str(av).strip()
+            row.address = s[:2000] if s else None
     if "coupons_enabled" in payload:
+        if not row.active:
+            raise HTTPException(
+                status_code=400,
+                detail="テナントが無効のときはクーポン設定を変更できません。",
+            )
         row.coupons_enabled = bool(payload["coupons_enabled"])
+    if row.coupons_enabled:
+        phone_ok = bool((row.phone or "").strip())
+        addr_ok = bool((row.address or "").strip())
+        if not phone_ok or not addr_ok:
+            raise HTTPException(
+                status_code=400,
+                detail="クーポン機能を有効にするには、テナントの電話番号と住所の両方が必要です。",
+            )
     row.updated_at = now
     session.add(row)
     session.commit()
@@ -587,6 +649,106 @@ def list_campaigns(
     return []
 
 
+class PublicTenantRegister(BaseModel):
+    company_name: str = Field(..., max_length=200)
+    email: str = Field(..., max_length=254)
+
+
+@api_router.post("/public/register-tenant")
+def create_public_tenant_register(
+    payload: PublicTenantRegister,
+    session: Annotated[Session, Depends(get_session)],
+):
+    """
+    公開の新規登録: 会社名でテナントを作成し、メールアドレスでテナント管理権限ユーザを1件作成する。
+    パスワードはサーバ側で自動生成し、レスポンスの一回のみ平文を返す。
+    """
+    company_name = str(payload.company_name or "").strip()
+    email = str(payload.email or "").strip().lower()
+    if not company_name:
+        raise HTTPException(status_code=400, detail="company_name required")
+    if len(company_name) > 200:
+        raise HTTPException(status_code=400, detail="company_name too long (max 200)")
+    if not email or "@" not in email or len(email) > 254:
+        raise HTTPException(status_code=400, detail="invalid email")
+
+    dup = session.exec(select(User).where(User.email == email)).first()
+    if dup:
+        raise HTTPException(status_code=409, detail="email already registered")
+
+    password_plain = _generate_tenant_admin_password_12()
+    now = datetime.now(timezone.utc)
+    tenant = Tenant(
+        name=company_name,
+        active=True,
+        coupons_enabled=False,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(tenant)
+    session.flush()
+    assert tenant.id is not None
+
+    user_row = User(
+        email=email,
+        password_hash=hash_password(password_plain),
+        role="tenant",
+        tenant_id=int(tenant.id),
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(user_row)
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="email already registered")
+    session.refresh(tenant)
+    session.refresh(user_row)
+    return {
+        "ok": True,
+        "tenant_id": tenant.id,
+        "tenant_name": tenant.name,
+        "user_id": user_row.id,
+        "email": user_row.email,
+        "password": password_plain,
+    }
+
+
+@api_router.post("/public/inquiries")
+def create_public_inquiry(
+    payload: InquiryCreate,
+    session: Annotated[Session, Depends(get_session)],
+):
+    name = str(payload.name or "").strip()
+    email = str(payload.email or "").strip()
+    message = str(payload.message or "").strip()
+
+    if not email or "@" not in email or len(email) > 254:
+        raise HTTPException(status_code=400, detail="invalid email")
+    if len(name) > 200:
+        raise HTTPException(status_code=400, detail="name too long (max 200)")
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    if len(message) > 5000:
+        raise HTTPException(status_code=400, detail="message too long (max 5000)")
+
+    row = Inquiry(name=name, email=email, message=message)
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return {"ok": True, "id": row.id}
+
+
+@api_router.get("/admin/inquiries", dependencies=[Depends(require_sysadmin)])
+def list_admin_inquiries(
+    session: Annotated[Session, Depends(get_session)],
+    _user: Annotated[User, Depends(require_sysadmin)],
+):
+    rows = session.exec(select(Inquiry).order_by(Inquiry.created_at.desc())).all()
+    return rows
+
+
 @api_router.get("/admin/campaigns", dependencies=[Depends(require_campaign_manager)])
 def list_admin_campaigns(
     session: Annotated[Session, Depends(get_session)],
@@ -759,6 +921,65 @@ def get_campaign(
 
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _normalize_mail_recipients(raw: str | list[str]) -> list[str]:
+    if isinstance(raw, str):
+        return [p.strip() for p in raw.split(",") if p.strip()]
+    return [str(x).strip() for x in raw if str(x).strip()]
+
+
+class MailSendBody(BaseModel):
+    to: str | list[str]
+    subject: str = Field(..., min_length=1, max_length=998)
+    text: str = Field(..., min_length=1, max_length=500_000)
+    html: str | None = Field(default=None, max_length=500_000)
+
+
+@api_router.get("/admin/mail/config", dependencies=[Depends(require_sysadmin)])
+def get_mail_config(
+    _user: Annotated[User, Depends(require_sysadmin)],
+):
+    """SMTP 設定の有無（秘密情報は返さない）。"""
+    s = smtp_settings()
+    return {
+        "configured": is_smtp_configured(),
+        "host": s["host"],
+        "port": s["port"],
+        "use_tls": s["use_tls"],
+        "use_ssl": s["use_ssl"],
+        "mail_from": s["mail_from"] or None,
+        "user_configured": bool(s["user"]),
+    }
+
+
+@api_router.post("/admin/mail/send", dependencies=[Depends(require_sysadmin)])
+def post_mail_send(
+    body: MailSendBody,
+    _user: Annotated[User, Depends(require_sysadmin)],
+):
+    """SMTP 経由でメールを送信（Mailgun の SMTP 認証情報を環境変数に設定）。"""
+    to_list = _normalize_mail_recipients(body.to)
+    for addr in to_list:
+        if "@" not in addr or len(addr) > 254 or not _EMAIL_RE.match(addr):
+            raise HTTPException(status_code=400, detail="invalid recipient email")
+    if not is_smtp_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="smtp not configured (set SMTP_USER, SMTP_PASSWORD, MAIL_FROM, etc.)",
+        )
+    try:
+        send_smtp_message(to=to_list, subject=body.subject, text=body.text, html=body.html)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        if str(e) in ("smtp_not_configured", "mail_from_not_set"):
+            raise HTTPException(status_code=503, detail="smtp not configured") from e
+        raise HTTPException(status_code=500, detail="mail send failed") from e
+    except (smtplib.SMTPException, OSError) as e:
+        logger.exception("smtp send error: %s", e)
+        raise HTTPException(status_code=502, detail="smtp send failed") from e
+    return {"ok": True}
 
 
 class VoteSubmitBody(BaseModel):
