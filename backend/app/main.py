@@ -45,6 +45,9 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 
+# 公開お問い合わせ登録時の通知先（SMTP 設定済みのときのみ送信）
+_INQUIRY_NOTIFY_EMAIL = "abe+aquilize@tech-be.com"
+
 LP_BACKGROUND_KEYS = frozenset(
     ("pastel_lavender", "pastel_mint", "pastel_peach", "pastel_sky", "pastel_lemon"),
 )
@@ -737,6 +740,26 @@ def create_public_inquiry(
     session.add(row)
     session.commit()
     session.refresh(row)
+
+    if is_smtp_configured():
+        display_name = name if name else "（未入力）"
+        subject = f"[Aquirise] お問い合わせ #{row.id}"
+        body_text = (
+            "お問い合わせが登録されました。\n\n"
+            f"ID: {row.id}\n"
+            f"お名前: {display_name}\n"
+            f"メール: {email}\n\n"
+            "--- 内容 ---\n"
+            f"{message}\n"
+            "--------------\n"
+        )
+        try:
+            send_smtp_message(to=_INQUIRY_NOTIFY_EMAIL, subject=subject, text=body_text)
+        except (ValueError, RuntimeError, smtplib.SMTPException, OSError) as e:
+            logger.exception("inquiry notify mail failed id=%s: %s", row.id, e)
+    else:
+        logger.info("inquiry id=%s saved; notify mail skipped (smtp not configured)", row.id)
+
     return {"ok": True, "id": row.id}
 
 
