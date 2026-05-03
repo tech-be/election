@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { Modal } from "./Modal";
 import {
   apiGet,
   apiPost,
@@ -17,6 +18,27 @@ import { resolveMediaUrl } from "../../lib/products";
 import { useRedirectIfMissingAdminToken } from "../../lib/useRedirectIfMissingAdminToken";
 
 type TenantRow = { id: number; name: string };
+
+function parseCouponLimitExceeded(err: unknown): { max_coupons: number; current_count: number } | null {
+  if (!(err instanceof Error) || !err.message.trim()) return null;
+  try {
+    const j = JSON.parse(err.message) as { detail?: unknown };
+    const d = j.detail;
+    if (d && typeof d === "object" && !Array.isArray(d)) {
+      const o = d as Record<string, unknown>;
+      if (o.code === "coupon_limit_exceeded") {
+        const maxVal = Number(o.max_coupons);
+        const curVal = Number(o.current_count);
+        if (Number.isFinite(maxVal) && Number.isFinite(curVal)) {
+          return { max_coupons: maxVal, current_count: curVal };
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 export function CouponCreatePanel({
   token,
@@ -44,6 +66,8 @@ export function CouponCreatePanel({
   const [fileInputNonce, setFileInputNonce] = useState(0);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignLinkId, setCampaignLinkId] = useState("");
+  const [maxDistributionCount, setMaxDistributionCount] = useState("10");
+  const [couponLimitModal, setCouponLimitModal] = useState<string | null>(null);
 
   const filteredCampaigns = useMemo(() => {
     if (role === "sysadmin") {
@@ -183,6 +207,21 @@ export function CouponCreatePanel({
           />
         </label>
 
+        <label className="block text-sm text-slate-200">
+          最大配布数
+          <input
+            type="number"
+            min={1}
+            max={1000000}
+            className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+            value={maxDistributionCount}
+            onChange={(e) => setMaxDistributionCount(e.target.value)}
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            投票完了時に発行できるクーポン（URL）の上限件数です（既定 10）。
+          </p>
+        </label>
+
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block text-sm text-slate-200">
             発行開始日
@@ -316,6 +355,21 @@ export function CouponCreatePanel({
             disabled={!token || loading || name.trim().length === 0 || (role === "sysadmin" && tenantIdForCreate.length === 0)}
             onClick={async () => {
               if (!token) return;
+              const mdTrim = maxDistributionCount.trim();
+              if (!mdTrim) {
+                setError("最大配布数を入力してください");
+                return;
+              }
+              const mdParsed = Number(mdTrim);
+              if (
+                !Number.isFinite(mdParsed) ||
+                !Number.isInteger(mdParsed) ||
+                mdParsed < 1 ||
+                mdParsed > 1_000_000
+              ) {
+                setError("最大配布数は 1 以上 1000000 以下の整数で入力してください");
+                return;
+              }
               setLoading(true);
               setError(null);
               try {
@@ -327,6 +381,7 @@ export function CouponCreatePanel({
                   campaign_id: campaignLinkId ? Number(campaignLinkId) : null,
                   issue_starts_at: issueStartsAt.trim() ? new Date(issueStartsAt).toISOString() : null,
                   use_ends_at: useEndsAt.trim() ? new Date(useEndsAt).toISOString() : null,
+                  max_distribution_count: mdParsed,
                 };
                 if (role === "sysadmin") body.tenant_id = Number(tenantIdForCreate);
                 const created = await apiPost<Coupon>("/admin/coupons", body, {
@@ -334,8 +389,15 @@ export function CouponCreatePanel({
                 });
                 onCreated?.(created);
                 onClose();
-              } catch {
-                setError("登録に失敗しました（入力エラー/権限不足の可能性）");
+              } catch (e) {
+                const lim = parseCouponLimitExceeded(e);
+                if (lim) {
+                  setCouponLimitModal(
+                    `このテナントで登録できるクーポンは最大 ${lim.max_coupons} 件です（現在 ${lim.current_count} 件登録済み）。\n\n上限を上げるにはプランの変更が必要です。問い合わせフォームより「プラン変更希望」としてテナント名とご担当者様のご連絡先を記載の上、お問い合わせください。`,
+                  );
+                } else {
+                  setError("登録に失敗しました（入力エラー/権限不足の可能性）");
+                }
               } finally {
                 setLoading(false);
               }
@@ -345,6 +407,12 @@ export function CouponCreatePanel({
           </button>
         </div>
       </section>
+
+      {couponLimitModal ? (
+        <Modal title="クーポンの登録上限" onClose={() => setCouponLimitModal(null)} maxWidthClassName="max-w-md">
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{couponLimitModal}</p>
+        </Modal>
+      ) : null}
     </div>
   );
 }

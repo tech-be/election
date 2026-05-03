@@ -52,6 +52,7 @@ export function CouponEditPanel({
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignLinkId, setCampaignLinkId] = useState("");
   const [testToken, setTestToken] = useState<string>("");
+  const [maxDistributionCount, setMaxDistributionCount] = useState("10");
 
   const effectiveTenantId = tenantId.length > 0 ? Number(tenantId) : NaN;
   const filteredCampaigns = useMemo(() => {
@@ -108,6 +109,7 @@ export function CouponEditPanel({
         setTestToken(c.test_token ?? "");
         setTenantId(String(c.tenant_id));
         setCampaignLinkId(c.campaign_id != null ? String(c.campaign_id) : "");
+        setMaxDistributionCount(String(c.max_distribution_count ?? 10));
       } catch {
         setLoadError("取得に失敗しました");
       } finally {
@@ -252,6 +254,21 @@ export function CouponEditPanel({
             />
           </label>
 
+          <label className="block text-sm text-slate-200">
+            最大配布数
+            <input
+              type="number"
+              min={1}
+              max={1000000}
+              className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+              value={maxDistributionCount}
+              onChange={(e) => setMaxDistributionCount(e.target.value)}
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              投票完了時に発行できるクーポン（URL）の上限件数です。既に発行済みの件数より小さくは設定できません（既定 10）。
+            </p>
+          </label>
+
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="block text-sm text-slate-200">
               発行開始日
@@ -394,6 +411,21 @@ export function CouponEditPanel({
               }
               onClick={async () => {
                 if (!token) return;
+                const mdTrim = maxDistributionCount.trim();
+                if (!mdTrim) {
+                  setSaveError("最大配布数を入力してください");
+                  return;
+                }
+                const mdParsed = Number(mdTrim);
+                if (
+                  !Number.isFinite(mdParsed) ||
+                  !Number.isInteger(mdParsed) ||
+                  mdParsed < 1 ||
+                  mdParsed > 1_000_000
+                ) {
+                  setSaveError("最大配布数は 1 以上 1000000 以下の整数で入力してください");
+                  return;
+                }
                 setLoading(true);
                 setSaveError(null);
                 try {
@@ -405,6 +437,7 @@ export function CouponEditPanel({
                     campaign_id: campaignLinkId ? Number(campaignLinkId) : null,
                     issue_starts_at: issueStartsAt.trim() ? new Date(issueStartsAt).toISOString() : null,
                     use_ends_at: useEndsAt.trim() ? new Date(useEndsAt).toISOString() : null,
+                    max_distribution_count: mdParsed,
                   };
                   if (role === "sysadmin") body.tenant_id = Number(tenantId);
                   await apiPatch<Coupon>(`/admin/coupons/${couponId}`, body, {
@@ -417,6 +450,7 @@ export function CouponEditPanel({
                     image_url: imageUrl.trim() ? imageUrl : null,
                     lp_title: lpTitle.trim() ? lpTitle.trim() : null,
                     campaign_id: campaignLinkId ? Number(campaignLinkId) : null,
+                    max_distribution_count: mdParsed,
                   });
                   onClose();
                 } catch {

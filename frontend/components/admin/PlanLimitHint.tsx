@@ -41,10 +41,13 @@ function LampIcon({ className }: { className?: string }) {
 export function PlanLimitHint({
   valueLabel,
   tooltipContent,
+  limitLabel = "プラン上限数",
 }: {
   valueLabel: React.ReactNode;
   /** 未指定時はプラン変更・問い合わせ案内（既定文） */
   tooltipContent?: React.ReactNode;
+  /** 「プラン上限数」の表示文言（末尾に 「：」 が付きます） */
+  limitLabel?: string;
 }) {
   const [hover, setHover] = useState(false);
   const [pinned, setPinned] = useState(false);
@@ -94,13 +97,13 @@ export function PlanLimitHint({
       onMouseLeave={() => scheduleHoverLeave()}
     >
       <span className="text-slate-300">
-        プラン上限数：
+        {limitLabel}：
         <span className="ml-1 tabular-nums font-medium text-slate-100">{valueLabel}</span>
       </span>
       <button
         type="button"
         className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-amber-300/90 outline-none ring-offset-2 ring-offset-slate-950 hover:bg-slate-800/80 hover:text-amber-200 focus-visible:ring-2 focus-visible:ring-indigo-400"
-        aria-label="プラン上限数の説明を表示"
+        aria-label={`${limitLabel}の説明を表示`}
         aria-describedby={visible ? tipId : undefined}
         aria-expanded={visible}
         onFocus={() => setFocused(true)}

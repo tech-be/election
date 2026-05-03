@@ -13,12 +13,14 @@ import {
   redirectIfSessionExpired,
   type Campaign,
   type Coupon,
+  type Tenant,
 } from "../../../lib/api";
 import { useCouponAdminAccess } from "../../../lib/useCouponAdminAccess";
 import { Modal } from "../../../components/admin/Modal";
 import { CouponEditPanel } from "../../../components/admin/CouponEditPanel";
 import { CouponCreatePanel } from "../../../components/admin/CouponCreatePanel";
 import { CouponFeatureDisabledNotice } from "../../../components/admin/CouponFeatureDisabledNotice";
+import { PlanLimitHint } from "../../../components/admin/PlanLimitHint";
 import { resolveMediaUrl } from "../../../lib/products";
 import { useRedirectIfMissingAdminToken } from "../../../lib/useRedirectIfMissingAdminToken";
 
@@ -36,6 +38,8 @@ export default function AdminCouponsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [creatingOpen, setCreatingOpen] = useState(false);
+  const [planTenant, setPlanTenant] = useState<Tenant | null>(null);
+  const [couponLimitModalText, setCouponLimitModalText] = useState<string | null>(null);
 
   const couponAccess = useCouponAdminAccess(token, mounted);
 
@@ -46,6 +50,36 @@ export default function AdminCouponsPage() {
   }, []);
 
   useRedirectIfMissingAdminToken(mounted, token);
+
+  useEffect(() => {
+    if (!token || couponAccess !== "full") return;
+    const rr = (role ?? "").trim().toLowerCase();
+    if (rr !== "tenant" && rr !== "user") {
+      setPlanTenant(null);
+      return;
+    }
+    const tidRaw =
+      typeof window !== "undefined" ? (localStorage.getItem("admin_tenant_id") ?? "").trim() : "";
+    const tid = tidRaw && /^\d+$/.test(tidRaw) ? Number(tidRaw) : NaN;
+    if (!Number.isFinite(tid)) {
+      setPlanTenant(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const t = await apiGet<Tenant>(`/admin/tenants/${tid}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!cancelled) setPlanTenant(t);
+      } catch {
+        if (!cancelled) setPlanTenant(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, role, couponAccess]);
 
   const loadCouponPage = useCallback(
     async (p: number) => {
@@ -81,6 +115,7 @@ export default function AdminCouponsPage() {
 
   const rows = listData?.items ?? [];
   const totalPages = listData?.total_pages ?? 1;
+  const couponTotal = listData?.total ?? 0;
 
   const pageButtons = useMemo(() => {
     const n = totalPages;
@@ -129,18 +164,60 @@ export default function AdminCouponsPage() {
     return c ? `${c.name}（${c.code}）` : `ID:${campaignId}`;
   }
 
+  const viewerRoleLc = (role ?? "").trim().toLowerCase();
+  const showTenantPlanUsage = viewerRoleLc === "tenant" || viewerRoleLc === "user";
+
   return (
     <main className="w-full max-w-none space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
+        <div className="min-w-0 flex-1 space-y-3">
           <h1 className="text-2xl font-semibold tracking-tight">クーポン一覧</h1>
+          {showTenantPlanUsage && couponAccess === "full" ? (
+            <div className="flex flex-wrap gap-x-8 gap-y-1 text-sm leading-relaxed text-slate-300">
+              <span>
+                現在のクーポン数：
+                <span className="ml-1 tabular-nums font-medium text-slate-100">{couponTotal}</span>
+              </span>
+              <PlanLimitHint
+                limitLabel="最大作成可能クーポン数"
+                valueLabel={planTenant != null ? planTenant.max_coupons ?? 10 : "—"}
+              />
+            </div>
+          ) : null}
         </div>
         {couponAccess === "full" ? (
           <button
             className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
             type="button"
             disabled={!token}
-            onClick={() => setCreatingOpen(true)}
+            onClick={() => {
+              if (!token) return;
+              void (async () => {
+                const rr = (role ?? "").trim().toLowerCase();
+                if (rr === "tenant" || rr === "user") {
+                  const tidRaw = (typeof window !== "undefined" ? localStorage.getItem("admin_tenant_id") : null)?.trim();
+                  const tid = tidRaw && /^\d+$/.test(tidRaw) ? Number(tidRaw) : NaN;
+                  if (Number.isFinite(tid)) {
+                    try {
+                      const t = await apiGet<Tenant>(`/admin/tenants/${tid}`, {
+                        headers: { Authorization: `Bearer ${token}` },
+                      });
+                      const max = typeof t.max_coupons === "number" ? t.max_coupons : 10;
+                      const count = couponTotal;
+                      if (count >= max) {
+                        setCouponLimitModalText(
+                          `このテナントで登録できるクーポンは最大 ${max} 件です（現在 ${count} 件登録済み）。\n\n上限を上げるにはプランの変更が必要です。問い合わせフォームより「プラン変更希望」としてテナント名とご担当者様のご連絡先を記載の上、お問い合わせください。`,
+                        );
+                        return;
+                      }
+                    } catch {
+                      /* 取得に失敗した場合はフォームを開き、サーバー側で検証する */
+                    }
+                  }
+                }
+                setCreatingOpen(true);
+              })();
+            }}
           >
             新規登録
           </button>
@@ -411,6 +488,12 @@ export default function AdminCouponsPage() {
               void loadCouponPage(1);
             }}
           />
+        </Modal>
+      ) : null}
+
+      {couponLimitModalText ? (
+        <Modal title="クーポンの登録上限" onClose={() => setCouponLimitModalText(null)} maxWidthClassName="max-w-md">
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{couponLimitModalText}</p>
         </Modal>
       ) : null}
     </main>

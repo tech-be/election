@@ -26,6 +26,10 @@ services:
       SMTP_TIMEOUT: ${SMTP_TIMEOUT:-30}
       # 問い合わせ通知先のフォールバック（DB にシスアドユーザが無いとき。カンマ区切りで複数可）
       INQUIRY_NOTIFY_EMAIL: ${INQUIRY_NOTIFY_EMAIL:-}
+      # ユーザー追加時の招待メールに記載する管理画面ログイン URL
+      ADMIN_LOGIN_URL: ${ADMIN_LOGIN_URL:-}
+      # パスワード再設定メールの {オリジン}/admin/reset-password?token=… に使用
+      PASSWORD_RESET_PUBLIC_BASE_URL: ${PASSWORD_RESET_PUBLIC_BASE_URL:-}
     ports:
       - "8001:8000"
     volumes:
