@@ -24,6 +24,8 @@ services:
       SMTP_USE_SSL: ${SMTP_USE_SSL:-false}
       MAIL_FROM: ${MAIL_FROM:-}
       SMTP_TIMEOUT: ${SMTP_TIMEOUT:-30}
+      # 問い合わせ通知先のフォールバック（DB にシスアドユーザが無いとき。カンマ区切りで複数可）
+      INQUIRY_NOTIFY_EMAIL: ${INQUIRY_NOTIFY_EMAIL:-}
     ports:
       - "8001:8000"
     volumes:

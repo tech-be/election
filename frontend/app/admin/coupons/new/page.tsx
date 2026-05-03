@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { CouponCreatePanel } from "../../../../components/admin/CouponCreatePanel";
 import { CouponFeatureDisabledNotice } from "../../../../components/admin/CouponFeatureDisabledNotice";
 import { useCouponAdminAccess } from "../../../../lib/useCouponAdminAccess";
+import { useRedirectIfMissingAdminToken } from "../../../../lib/useRedirectIfMissingAdminToken";
 
 export default function AdminCouponNewPage() {
   const router = useRouter();
@@ -19,6 +20,8 @@ export default function AdminCouponNewPage() {
     setMounted(true);
     setToken(localStorage.getItem("admin_token"));
   }, []);
+
+  useRedirectIfMissingAdminToken(mounted, token);
 
   return (
     <main className="w-full max-w-none space-y-6">
@@ -33,12 +36,6 @@ export default function AdminCouponNewPage() {
           一覧へ戻る
         </Link>
       </header>
-
-      {mounted && !token ? (
-        <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
-          ログイン情報がありません。先にログインしてください。
-        </div>
-      ) : null}
 
       {mounted && token && couponAccess === "loading" ? (
         <div className="rounded-2xl border border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">

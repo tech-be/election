@@ -11,23 +11,32 @@ import secrets
 import string
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func
+from starlette.requests import Request
+from sqlalchemy import delete, distinct, func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
+from app.admin_operation_audit import (
+    LEGACY_DETAIL_MARKER,
+    admin_operation_audit_middleware,
+    append_admin_operation_log,
+)
 from app.auth import get_current_user, require_campaign_manager, require_sysadmin
 from app.db import get_session
 from app.mail_smtp import is_smtp_configured, send_smtp_message, smtp_settings
 from app.models import (
+    INQUIRY_STATUS_VALUES,
+    AdminOperationLog,
     Campaign,
     CampaignCreate,
+    CampaignKind,
     CampaignUpdate,
     CampaignProduct,
     Coupon,
@@ -45,12 +54,114 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 
-# 公開お問い合わせ登録時の通知先（SMTP 設定済みのときのみ送信）
-_INQUIRY_NOTIFY_EMAIL = "abe+aquilize@tech-be.com"
+# 問い合わせ者への自動返信件名（SMTP 設定済みのとき送信）
+_INQUIRY_AUTO_REPLY_SUBJECT = "アキライズ：お問い合わせありがとうございます"
 
 LP_BACKGROUND_KEYS = frozenset(
     ("pastel_lavender", "pastel_mint", "pastel_peach", "pastel_sky", "pastel_lemon"),
 )
+
+
+class AdminAgentsRunRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=8000)
+
+
+OPERATION_LOG_PAGE_SIZE = 60
+TENANT_SUMMARY_PAGE_SIZE = 10
+CAMPAIGN_ADMIN_LIST_DEFAULT_PAGE_SIZE = 10
+CAMPAIGN_ADMIN_LIST_MAX_PAGE_SIZE = 5000
+COUPON_ADMIN_LIST_DEFAULT_PAGE_SIZE = 10
+COUPON_ADMIN_LIST_MAX_PAGE_SIZE = 5000
+INQUIRY_ADMIN_LIST_DEFAULT_PAGE_SIZE = 10
+INQUIRY_ADMIN_LIST_MAX_PAGE_SIZE = 5000
+TENANT_ADMIN_LIST_DEFAULT_PAGE_SIZE = 10
+TENANT_ADMIN_LIST_MAX_PAGE_SIZE = 5000
+
+
+class OperationLogItem(BaseModel):
+    id: int
+    created_at: datetime
+    user_email: str | None = None
+    user_role: str | None = None
+    screen: str
+    operation: str
+    api_name: str | None = None
+    detail: str | None = None
+
+
+class OperationLogListResponse(BaseModel):
+    items: list[OperationLogItem]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class TenantSummaryRow(BaseModel):
+    tenant_id: int
+    tenant_name: str
+    tenant_admin_count: int
+    tenant_user_count: int
+    campaign_count: int
+    vote_participation_count: int = Field(
+        description="当テナント配下企画への投票レコード数（1レコード＝1回の参加）。",
+    )
+    coupon_count: int = Field(description="テナントに紐づくクーポン（Coupon マスタ）の登録件数。")
+    coupon_distinct_user_count: int = Field(
+        description="クーポンを利用済み（used_at あり）のユニークメール数（テナント配下クーポン）。",
+    )
+
+
+class TenantSummaryListResponse(BaseModel):
+    items: list[TenantSummaryRow]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class AdminCampaignListResponse(BaseModel):
+    """GET /admin/campaigns のページング付き一覧。"""
+
+    items: list[dict[str, Any]]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class AdminCouponListResponse(BaseModel):
+    """GET /admin/coupons のページング付き一覧。"""
+
+    items: list[dict[str, Any]]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class AdminInquiryListResponse(BaseModel):
+    """GET /admin/inquiries のページング付き一覧（シスアドのみ）。"""
+
+    items: list[dict[str, Any]]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class AdminInquiryStatusPatch(BaseModel):
+    status: str
+
+
+class AdminTenantListResponse(BaseModel):
+    """GET /admin/tenants のページング付き一覧（シスアドのみ）。"""
+
+    items: list[dict[str, Any]]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
 
 
 def _normalize_lp_background_key(raw: str | None) -> str:
@@ -269,6 +380,11 @@ if cors_origins:
         allow_headers=["*"],
     )
 
+@app.middleware("http")
+async def _admin_operation_audit_middleware(request: Request, call_next):
+    return await admin_operation_audit_middleware(request, call_next)
+
+
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/data/uploads")).resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -298,6 +414,14 @@ def admin_login(
 
     expected = os.getenv("ADMIN_PASSWORD", "admin")
     if email == "" and password == expected:
+        login_detail = json.dumps({"password": "***"}, ensure_ascii=False)
+        append_admin_operation_log(
+            user_id=None,
+            screen="/api/admin/login",
+            operation="POST /api/admin/login",
+            detail=f"{LEGACY_DETAIL_MARKER}\nlogin: {login_detail}",
+            api_name="admin_login",
+        )
         return {"token": expected, "role": "sysadmin"}
 
     if not email or not password:
@@ -319,6 +443,15 @@ def admin_login(
     row = SessionToken(token=token, user_id=user.id, created_at=datetime.now(timezone.utc), expires_at=None)
     session.add(row)
     session.commit()
+    uid = user.id
+    login_detail = json.dumps({"email": email, "password": "***"}, ensure_ascii=False)
+    append_admin_operation_log(
+        user_id=int(uid) if uid is not None else None,
+        screen="/api/admin/login",
+        operation="POST /api/admin/login",
+        detail=f"login: {login_detail}",
+        api_name="admin_login",
+    )
     return {"token": token, "role": user.role, "tenant_id": user.tenant_id}
 
 
@@ -402,8 +535,27 @@ def bootstrap_sysadmin(
 
 
 @api_router.get("/admin/tenants", dependencies=[Depends(require_sysadmin)])
-def list_tenants(session: Annotated[Session, Depends(get_session)]):
-    return session.exec(select(Tenant).order_by(Tenant.created_at.desc())).all()
+def list_tenants(
+    session: Annotated[Session, Depends(get_session)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=TENANT_ADMIN_LIST_MAX_PAGE_SIZE)] = TENANT_ADMIN_LIST_DEFAULT_PAGE_SIZE,
+) -> AdminTenantListResponse:
+    ps = min(page_size, TENANT_ADMIN_LIST_MAX_PAGE_SIZE)
+    total_raw = session.scalar(select(func.count(Tenant.id)))
+    total = int(total_raw or 0)
+    offset = (page - 1) * ps
+    rows = session.exec(
+        select(Tenant).order_by(Tenant.created_at.desc()).offset(offset).limit(ps)
+    ).all()
+    items = [r.model_dump(mode="json") for r in rows]
+    total_pages = (total + ps - 1) // ps if total > 0 else 1
+    return AdminTenantListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=ps,
+        total_pages=total_pages,
+    )
 
 
 @api_router.post("/admin/tenants", dependencies=[Depends(require_sysadmin)])
@@ -425,7 +577,7 @@ def patch_tenant(
     payload: dict,
     session: Annotated[Session, Depends(get_session)],
 ):
-    """テナント設定の更新（name / active / coupons_enabled / phone / address）。"""
+    """テナント設定の更新（name / active / coupons_enabled / phone / address / max_campaigns）。"""
     row = session.get(Tenant, tenant_id)
     if not row:
         raise HTTPException(status_code=404, detail="tenant not found")
@@ -451,6 +603,15 @@ def patch_tenant(
         else:
             s = str(av).strip()
             row.address = s[:2000] if s else None
+    if "max_campaigns" in payload:
+        mc_raw = payload["max_campaigns"]
+        try:
+            mc = int(mc_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="max_campaigns must be an integer")
+        if mc < 0 or mc > 10000:
+            raise HTTPException(status_code=400, detail="max_campaigns must be between 0 and 10000")
+        row.max_campaigns = mc
     if "coupons_enabled" in payload:
         if not row.active:
             raise HTTPException(
@@ -718,6 +879,57 @@ def create_public_tenant_register(
     }
 
 
+def _safe_mail_error_message(exc: BaseException) -> str:
+    """クライアントに返す短いエラー文言（長文・改行だらけの SMTP 応答は先頭行のみ）。"""
+    msg = str(exc).strip() or type(exc).__name__
+    first_line = msg.splitlines()[0].strip() if msg else type(exc).__name__
+    if len(first_line) > 400:
+        return first_line[:400] + "…"
+    return first_line
+
+
+def _sysadmin_inquiry_notify_recipients(session: Session) -> list[str]:
+    """
+    問い合わせ通知の送信先。DB の role=sysadmin のメールを優先。
+    1件も無いときは環境変数 INQUIRY_NOTIFY_EMAIL（カンマ区切り）を利用。
+    """
+    rows = session.exec(select(User).where(User.role == "sysadmin")).all()
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in rows:
+        em = (u.email or "").strip().lower()
+        if em and "@" in em and em not in seen:
+            seen.add(em)
+            out.append(em)
+    if out:
+        return out
+    raw = (os.getenv("INQUIRY_NOTIFY_EMAIL") or "").strip()
+    if not raw:
+        return []
+    for part in raw.split(","):
+        em = part.strip().lower()
+        if em and "@" in em and em not in seen:
+            seen.add(em)
+            out.append(em)
+    return out
+
+
+def _inquiry_auto_reply_body(contact_name: str) -> str:
+    """問い合わせ送信者への自動返信本文。"""
+    opener = f"{contact_name.strip()}様" if contact_name.strip() else "お客様"
+    return (
+        f"{opener}\n\n"
+        "お問い合わせありがとうございます。\n"
+        "担当にて確認させていただいた後ご回答を差し上げます。\n\n"
+        "回答に２営業日ほどかかる場合がございます。\n"
+        "しばしお待ちいただけますと幸いです。\n\n"
+        "もし回答がなかなか来ない場合は、何らかの障害が起こっている\n"
+        "可能性がありますので、あらためてのお問い合わせをいただけますと\n"
+        "大変助かります。\n\n"
+        "よろしくお願いいたします。\n"
+    )
+
+
 @api_router.post("/public/inquiries")
 def create_public_inquiry(
     payload: InquiryCreate,
@@ -741,10 +953,15 @@ def create_public_inquiry(
     session.commit()
     session.refresh(row)
 
+    notify_mail_ok: bool | None = None
+    notify_mail_error: str | None = None
+    auto_reply_mail_ok: bool | None = None
+    auto_reply_mail_error: str | None = None
+
     if is_smtp_configured():
         display_name = name if name else "（未入力）"
-        subject = f"[Aquirise] お問い合わせ #{row.id}"
-        body_text = (
+        staff_subject = f"[Aquirise] お問い合わせ #{row.id}"
+        staff_body = (
             "お問い合わせが登録されました。\n\n"
             f"ID: {row.id}\n"
             f"お名前: {display_name}\n"
@@ -753,38 +970,253 @@ def create_public_inquiry(
             f"{message}\n"
             "--------------\n"
         )
-        try:
-            send_smtp_message(to=_INQUIRY_NOTIFY_EMAIL, subject=subject, text=body_text)
-        except (ValueError, RuntimeError, smtplib.SMTPException, OSError) as e:
-            logger.exception("inquiry notify mail failed id=%s: %s", row.id, e)
-    else:
-        logger.info("inquiry id=%s saved; notify mail skipped (smtp not configured)", row.id)
+        recipients = _sysadmin_inquiry_notify_recipients(session)
+        if recipients:
+            try:
+                send_smtp_message(to=recipients, subject=staff_subject, text=staff_body)
+                notify_mail_ok = True
+            except (ValueError, RuntimeError, smtplib.SMTPException, OSError) as e:
+                logger.exception("inquiry staff notify mail failed id=%s: %s", row.id, e)
+                notify_mail_ok = False
+                notify_mail_error = _safe_mail_error_message(e)
+        else:
+            notify_mail_ok = False
+            notify_mail_error = (
+                "シスアドのメールアドレスがありません。"
+                "管理画面でシスアドユーザを作成するか、環境変数 INQUIRY_NOTIFY_EMAIL（カンマ区切り）を設定してください。"
+            )
+            logger.warning("inquiry id=%s: no sysadmin emails for staff notify", row.id)
 
-    return {"ok": True, "id": row.id}
+        try:
+            send_smtp_message(
+                to=email,
+                subject=_INQUIRY_AUTO_REPLY_SUBJECT,
+                text=_inquiry_auto_reply_body(name),
+            )
+            auto_reply_mail_ok = True
+        except (ValueError, RuntimeError, smtplib.SMTPException, OSError) as e:
+            logger.exception("inquiry auto-reply mail failed id=%s: %s", row.id, e)
+            auto_reply_mail_ok = False
+            auto_reply_mail_error = _safe_mail_error_message(e)
+    else:
+        logger.info("inquiry id=%s saved; mail skipped (smtp not configured)", row.id)
+        notify_mail_ok = None
+        auto_reply_mail_ok = None
+
+    return {
+        "ok": True,
+        "id": row.id,
+        "notify_mail_ok": notify_mail_ok,
+        "notify_mail_error": notify_mail_error,
+        "auto_reply_mail_ok": auto_reply_mail_ok,
+        "auto_reply_mail_error": auto_reply_mail_error,
+    }
 
 
 @api_router.get("/admin/inquiries", dependencies=[Depends(require_sysadmin)])
 def list_admin_inquiries(
     session: Annotated[Session, Depends(get_session)],
     _user: Annotated[User, Depends(require_sysadmin)],
-):
-    rows = session.exec(select(Inquiry).order_by(Inquiry.created_at.desc())).all()
-    return rows
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=INQUIRY_ADMIN_LIST_MAX_PAGE_SIZE)] = INQUIRY_ADMIN_LIST_DEFAULT_PAGE_SIZE,
+) -> AdminInquiryListResponse:
+    ps = min(page_size, INQUIRY_ADMIN_LIST_MAX_PAGE_SIZE)
+    total_raw = session.scalar(select(func.count(Inquiry.id)))
+    total = int(total_raw or 0)
+    offset = (page - 1) * ps
+    rows = session.exec(
+        select(Inquiry).order_by(Inquiry.created_at.desc()).offset(offset).limit(ps)
+    ).all()
+    items = [r.model_dump(mode="json") for r in rows]
+    total_pages = (total + ps - 1) // ps if total > 0 else 1
+    return AdminInquiryListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=ps,
+        total_pages=total_pages,
+    )
 
 
-@api_router.get("/admin/campaigns", dependencies=[Depends(require_campaign_manager)])
-def list_admin_campaigns(
+@api_router.patch("/admin/inquiries/{inquiry_id}", dependencies=[Depends(require_sysadmin)])
+def patch_admin_inquiry_status(
+    inquiry_id: int,
+    payload: AdminInquiryStatusPatch,
     session: Annotated[Session, Depends(get_session)],
-    user: Annotated[User, Depends(require_campaign_manager)],
+    _user: Annotated[User, Depends(require_sysadmin)],
 ):
-    q = select(Campaign).order_by(Campaign.created_at.desc())
-    if user.role in ("tenant", "user"):
-        if user.tenant_id is None:
-            raise HTTPException(status_code=400, detail="user has no tenant")
-        q = q.where(Campaign.tenant_id == user.tenant_id)
-    rows = session.exec(q).all()
+    """問い合わせ状態の更新（シスアドのみ）。成功時は操作履歴ミドルウェアが PATCH を記録する。"""
+    row = session.get(Inquiry, inquiry_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="not found")
+    st = str(payload.status or "").strip()
+    if st not in INQUIRY_STATUS_VALUES:
+        raise HTTPException(status_code=400, detail="invalid inquiry status")
+    row.status = st[:20]
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row.model_dump(mode="json")
 
-    # Avoid N+1: load all products in one query and group in memory.
+
+@api_router.get("/admin/operation-logs")
+def list_admin_operation_logs(
+    session: Annotated[Session, Depends(get_session)],
+    _user: Annotated[User, Depends(require_sysadmin)],
+    page: Annotated[int, Query(ge=1)] = 1,
+) -> OperationLogListResponse:
+    """管理操作履歴（新しい順）。シスアドのみ。"""
+    total_raw = session.scalar(select(func.count(AdminOperationLog.id)))
+    total = int(total_raw or 0)
+    offset = (page - 1) * OPERATION_LOG_PAGE_SIZE
+    stmt = (
+        select(AdminOperationLog, User.email, User.role)
+        .outerjoin(User, AdminOperationLog.user_id == User.id)
+        .order_by(AdminOperationLog.created_at.desc())
+        .offset(offset)
+        .limit(OPERATION_LOG_PAGE_SIZE)
+    )
+    rows = session.exec(stmt).all()
+    items: list[OperationLogItem] = []
+    for log, email, role in rows:
+        if log.id is None:
+            continue
+        items.append(
+            OperationLogItem(
+                id=int(log.id),
+                created_at=log.created_at,
+                user_email=email,
+                user_role=role,
+                screen=log.screen,
+                operation=log.operation,
+                api_name=log.api_name,
+                detail=log.detail,
+            )
+        )
+    total_pages = (total + OPERATION_LOG_PAGE_SIZE - 1) // OPERATION_LOG_PAGE_SIZE if total > 0 else 1
+    return OperationLogListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=OPERATION_LOG_PAGE_SIZE,
+        total_pages=total_pages,
+    )
+
+
+def _grouped_int_counts(session: Session, stmt) -> dict[int, int]:
+    out: dict[int, int] = {}
+    for row in session.exec(stmt).all():
+        tid, n = row[0], row[1]
+        if tid is None:
+            continue
+        out[int(tid)] = int(n or 0)
+    return out
+
+
+@api_router.get("/admin/system/tenant-summary")
+def admin_system_tenant_summary(
+    session: Annotated[Session, Depends(get_session)],
+    _user: Annotated[User, Depends(require_sysadmin)],
+    page: Annotated[int, Query(ge=1)] = 1,
+) -> TenantSummaryListResponse:
+    """テナント別の利用状況集計（シスアドのみ）。10件ごとにページング。"""
+    tenants = session.exec(select(Tenant).order_by(Tenant.id.asc())).all()
+
+    tenant_admins = _grouped_int_counts(
+        session,
+        select(User.tenant_id, func.count(User.id))
+        .where(User.role == "tenant", User.tenant_id.isnot(None))
+        .group_by(User.tenant_id),
+    )
+    tenant_users = _grouped_int_counts(
+        session,
+        select(User.tenant_id, func.count(User.id))
+        .where(User.role == "user", User.tenant_id.isnot(None))
+        .group_by(User.tenant_id),
+    )
+    campaigns_by_t = _grouped_int_counts(
+        session,
+        select(Campaign.tenant_id, func.count(Campaign.id)).group_by(Campaign.tenant_id),
+    )
+    votes_by_t = _grouped_int_counts(
+        session,
+        select(Campaign.tenant_id, func.count(Vote.id))
+        .join(Vote, Vote.campaign_id == Campaign.id)
+        .group_by(Campaign.tenant_id),
+    )
+    coupon_users_by_t = _grouped_int_counts(
+        session,
+        select(Coupon.tenant_id, func.count(distinct(CouponIssue.email)))
+        .select_from(CouponIssue)
+        .join(Coupon, CouponIssue.coupon_id == Coupon.id)
+        .where(CouponIssue.used_at.isnot(None))
+        .group_by(Coupon.tenant_id),
+    )
+    coupons_registered_by_t = _grouped_int_counts(
+        session,
+        select(Coupon.tenant_id, func.count(Coupon.id)).group_by(Coupon.tenant_id),
+    )
+
+    rows: list[TenantSummaryRow] = []
+    for t in tenants:
+        if t.id is None:
+            continue
+        tid = int(t.id)
+        rows.append(
+            TenantSummaryRow(
+                tenant_id=tid,
+                tenant_name=t.name,
+                tenant_admin_count=tenant_admins.get(tid, 0),
+                tenant_user_count=tenant_users.get(tid, 0),
+                campaign_count=campaigns_by_t.get(tid, 0),
+                vote_participation_count=votes_by_t.get(tid, 0),
+                coupon_count=coupons_registered_by_t.get(tid, 0),
+                coupon_distinct_user_count=coupon_users_by_t.get(tid, 0),
+            )
+        )
+    total = len(rows)
+    total_pages = (total + TENANT_SUMMARY_PAGE_SIZE - 1) // TENANT_SUMMARY_PAGE_SIZE if total > 0 else 1
+    offset = (page - 1) * TENANT_SUMMARY_PAGE_SIZE
+    page_rows = rows[offset : offset + TENANT_SUMMARY_PAGE_SIZE]
+    return TenantSummaryListResponse(
+        items=page_rows,
+        total=total,
+        page=page,
+        page_size=TENANT_SUMMARY_PAGE_SIZE,
+        total_pages=total_pages,
+    )
+
+
+def _default_campaign_kind_id(session: Session) -> int:
+    row = session.exec(select(CampaignKind).order_by(CampaignKind.id.asc())).first()
+    if not row or row.id is None:
+        raise HTTPException(status_code=500, detail="campaign kinds master is empty")
+    return int(row.id)
+
+
+def _resolve_campaign_kind_id(session: Session, raw: int | None) -> int:
+    if raw is None:
+        return _default_campaign_kind_id(session)
+    k = session.get(CampaignKind, int(raw))
+    if not k:
+        raise HTTPException(status_code=400, detail="invalid campaign_kind_id")
+    return int(k.id)
+
+
+def _campaign_admin_response(session: Session, row: Campaign) -> dict:
+    out = row.model_dump()
+    k = session.get(CampaignKind, row.campaign_kind_id)
+    out["campaign_kind_name"] = k.name if k else ""
+    return out
+
+
+@api_router.get("/admin/campaign-kinds", dependencies=[Depends(require_campaign_manager)])
+def list_campaign_kinds(session: Annotated[Session, Depends(get_session)]):
+    """企画種別マスタ一覧（管理画面の選択肢用）。"""
+    return session.exec(select(CampaignKind).order_by(CampaignKind.id.asc())).all()
+
+
+def _build_admin_campaign_list_payloads(session: Session, rows: list[Campaign]) -> list[dict[str, Any]]:
     ids = [r.id for r in rows if r.id is not None]
     grouped: dict[int, list[CampaignProduct]] = {}
     if ids:
@@ -796,12 +1228,17 @@ def list_admin_campaigns(
         for p in all_products:
             grouped.setdefault(int(p.campaign_id), []).append(p)
 
+    kind_rows = session.exec(select(CampaignKind)).all()
+    kind_name_by_id: dict[int, str] = {int(k.id): k.name for k in kind_rows if k.id is not None}
+
+    out: list[dict[str, Any]] = []
     for r in rows:
         cid = int(r.id) if r.id is not None else None
         if cid is None:
             continue
         prods = grouped.get(cid, [])
-        r.products_json = json.dumps(
+        payload = r.model_dump()
+        payload["products_json"] = json.dumps(
             [
                 {
                     "name": p.name,
@@ -815,7 +1252,45 @@ def list_admin_campaigns(
             ],
             ensure_ascii=False,
         )
-    return rows
+        payload["campaign_kind_name"] = kind_name_by_id.get(int(r.campaign_kind_id), "")
+        out.append(payload)
+    return out
+
+
+@api_router.get("/admin/campaigns", dependencies=[Depends(require_campaign_manager)])
+def list_admin_campaigns(
+    session: Annotated[Session, Depends(get_session)],
+    user: Annotated[User, Depends(require_campaign_manager)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=CAMPAIGN_ADMIN_LIST_MAX_PAGE_SIZE)] = CAMPAIGN_ADMIN_LIST_DEFAULT_PAGE_SIZE,
+) -> AdminCampaignListResponse:
+    ps = min(page_size, CAMPAIGN_ADMIN_LIST_MAX_PAGE_SIZE)
+    tenant_filter = None
+    if user.role in ("tenant", "user"):
+        if user.tenant_id is None:
+            raise HTTPException(status_code=400, detail="user has no tenant")
+        tenant_filter = Campaign.tenant_id == user.tenant_id
+
+    count_stmt = select(func.count(Campaign.id))
+    if tenant_filter is not None:
+        count_stmt = count_stmt.where(tenant_filter)
+    total = int(session.scalar(count_stmt) or 0)
+
+    q = select(Campaign).order_by(Campaign.created_at.desc())
+    if tenant_filter is not None:
+        q = q.where(tenant_filter)
+    offset = (page - 1) * ps
+    rows = session.exec(q.offset(offset).limit(ps)).all()
+
+    items = _build_admin_campaign_list_payloads(session, list(rows))
+    total_pages = (total + ps - 1) // ps if total > 0 else 1
+    return AdminCampaignListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=ps,
+        total_pages=total_pages,
+    )
 
 
 @api_router.get("/admin/campaigns/{code}", dependencies=[Depends(require_campaign_manager)])
@@ -831,7 +1306,7 @@ def get_admin_campaign(
     if user.role in ("tenant", "user") and row.tenant_id != user.tenant_id:
         raise HTTPException(status_code=403, detail="forbidden")
     row.products_json = json.dumps(_campaign_products_to_json_list(session, row.id), ensure_ascii=False)
-    return row
+    return _campaign_admin_response(session, row)
 
 
 def _campaign_vote_results_payload(row: Campaign, session: Session) -> dict:
@@ -1278,6 +1753,27 @@ def create_campaign(
         if not tenant:
             raise HTTPException(status_code=404, detail="tenant not found")
         data["tenant_id"] = tid
+
+    eff_tid = int(data["tenant_id"])
+    tenant_row = session.get(Tenant, eff_tid)
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    cur_count = int(
+        session.exec(select(func.count()).select_from(Campaign).where(Campaign.tenant_id == eff_tid)).one() or 0
+    )
+    if cur_count >= int(tenant_row.max_campaigns):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "campaign_limit_exceeded",
+                "max_campaigns": int(tenant_row.max_campaigns),
+                "current_count": cur_count,
+            },
+        )
+
+    raw_kind = data.pop("campaign_kind_id", None)
+    data["campaign_kind_id"] = _resolve_campaign_kind_id(session, raw_kind)
+
     data["lp_background_key"] = _normalize_lp_background_key(data.get("lp_background_key"))
     data["vote_max_products"] = _clamp_vote_max_products(data.get("vote_max_products"))
     _validate_period(data.get("starts_at"), data.get("ends_at"), "campaign")
@@ -1288,7 +1784,7 @@ def create_campaign(
     session.commit()
     session.refresh(row)
     row.products_json = json.dumps(_campaign_products_to_json_list(session, row.id), ensure_ascii=False)
-    return row
+    return _campaign_admin_response(session, row)
 
 
 @api_router.patch("/admin/campaigns/{code}", dependencies=[Depends(require_campaign_manager)])
@@ -1305,6 +1801,15 @@ def update_campaign(
         raise HTTPException(status_code=403, detail="forbidden")
 
     data = payload.model_dump(exclude_unset=True)
+    if "campaign_kind_id" in data:
+        kid = data["campaign_kind_id"]
+        if kid is None:
+            data.pop("campaign_kind_id", None)
+        else:
+            k = session.get(CampaignKind, int(kid))
+            if not k:
+                raise HTTPException(status_code=400, detail="invalid campaign_kind_id")
+            data["campaign_kind_id"] = int(k.id)
     if "lp_background_key" in data and data["lp_background_key"] is not None:
         data["lp_background_key"] = _normalize_lp_background_key(str(data["lp_background_key"]))
     if "vote_max_products" in data and data["vote_max_products"] is not None:
@@ -1333,7 +1838,7 @@ def update_campaign(
     session.commit()
     session.refresh(row)
     row.products_json = json.dumps(_campaign_products_to_json_list(session, row.id), ensure_ascii=False)
-    return row
+    return _campaign_admin_response(session, row)
 
 
 @api_router.delete("/admin/campaigns/{code}", dependencies=[Depends(require_campaign_manager)])
@@ -1407,15 +1912,38 @@ def delete_campaign_product(
 def list_coupons(
     session: Annotated[Session, Depends(get_session)],
     user: Annotated[User, Depends(require_campaign_manager)],
-):
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=COUPON_ADMIN_LIST_MAX_PAGE_SIZE)] = COUPON_ADMIN_LIST_DEFAULT_PAGE_SIZE,
+) -> AdminCouponListResponse:
+    tenant_filter = None
     if user.role in ("tenant", "user"):
         if user.tenant_id is None:
             raise HTTPException(status_code=400, detail="user has no tenant")
         _assert_tenant_coupons_feature(session, user.tenant_id, user)
+        tenant_filter = Coupon.tenant_id == user.tenant_id
+
+    ps = min(page_size, COUPON_ADMIN_LIST_MAX_PAGE_SIZE)
+
+    count_stmt = select(func.count(Coupon.id))
+    if tenant_filter is not None:
+        count_stmt = count_stmt.where(tenant_filter)
+    total = int(session.scalar(count_stmt) or 0)
+
     q = select(Coupon).order_by(Coupon.created_at.desc())
-    if user.role in ("tenant", "user"):
-        q = q.where(Coupon.tenant_id == user.tenant_id)
-    return session.exec(q).all()
+    if tenant_filter is not None:
+        q = q.where(tenant_filter)
+    offset = (page - 1) * ps
+    rows = session.exec(q.offset(offset).limit(ps)).all()
+
+    items = [r.model_dump(mode="json") for r in rows]
+    total_pages = (total + ps - 1) // ps if total > 0 else 1
+    return AdminCouponListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=ps,
+        total_pages=total_pages,
+    )
 
 
 @api_router.post("/admin/coupons", dependencies=[Depends(require_campaign_manager)])
@@ -1652,6 +2180,48 @@ def delete_coupon(
     session.delete(row)
     session.commit()
     return {"ok": True}
+
+
+@api_router.post("/admin/agents/run", dependencies=[Depends(require_campaign_manager)])
+async def admin_agents_run(payload: AdminAgentsRunRequest):
+    """マルチエージェント（Coordinator → Creator / General）を実行。画像生成は Creator が DALL·E 3 を使用。"""
+    from agents.exceptions import AgentsException, MaxTurnsExceeded
+    from openai import OpenAIError
+
+    from app.openai_agents_workflow import (
+        openai_agents_configured,
+        run_coordinator,
+        summarize_run_steps,
+    )
+
+    if not openai_agents_configured():
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured")
+    try:
+        result = await run_coordinator(payload.message)
+    except MaxTurnsExceeded:
+        raise HTTPException(status_code=504, detail="agent run exceeded max turns") from None
+    except AgentsException as e:
+        logger.warning("agents run failed: %s", e)
+        raise HTTPException(status_code=502, detail=str(e)) from None
+    except OpenAIError as e:
+        logger.warning("OpenAI API error in agents run: %s", e)
+        raise HTTPException(status_code=502, detail=str(e)) from None
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from None
+    except Exception:
+        logger.exception("unexpected agents run failure")
+        raise HTTPException(status_code=502, detail="agent run failed") from None
+
+    final = result.final_output
+    final_str = "" if final is None else final if isinstance(final, str) else str(final)
+    last_name = result.last_agent.name if result.last_agent else None
+    steps = summarize_run_steps(result)
+    try:
+        result.release_agents()
+    except Exception:
+        pass
+
+    return {"final_output": final_str, "last_agent": last_name, "steps": steps}
 
 
 app.include_router(api_router)

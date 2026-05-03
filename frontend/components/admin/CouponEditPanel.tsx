@@ -3,9 +3,18 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { apiGet, apiPatch, type Campaign, type Coupon } from "../../lib/api";
+import {
+  apiGet,
+  apiPatch,
+  fetchAdminCampaignsAllForSelect,
+  fetchAdminTenantsAllForSelect,
+  redirectIfSessionExpired,
+  type Campaign,
+  type Coupon,
+} from "../../lib/api";
 import { COUPON_LP_DEFAULT_TITLE } from "../../lib/couponLp";
 import { resolveMediaUrl } from "../../lib/products";
+import { useRedirectIfMissingAdminToken } from "../../lib/useRedirectIfMissingAdminToken";
 
 type TenantRow = { id: number; name: string };
 
@@ -55,13 +64,13 @@ export function CouponEditPanel({
     setRole(localStorage.getItem("admin_role") ?? "");
   }, []);
 
+  useRedirectIfMissingAdminToken(mounted, token);
+
   useEffect(() => {
     if (!token || role !== "sysadmin") return;
     (async () => {
       try {
-        const rows = await apiGet<TenantRow[]>("/admin/tenants", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const rows = await fetchAdminTenantsAllForSelect(token);
         setTenants(rows);
       } catch {
         setTenants([]);
@@ -73,9 +82,7 @@ export function CouponEditPanel({
     if (!token) return;
     (async () => {
       try {
-        const c = await apiGet<Campaign[]>("/admin/campaigns", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const c = await fetchAdminCampaignsAllForSelect(token);
         setCampaigns(c);
       } catch {
         setCampaigns([]);
@@ -118,11 +125,13 @@ export function CouponEditPanel({
         "http://localhost:8001";
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch(`${base}/api/admin/uploads`, {
+      const upInit: RequestInit = {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
-      });
+      };
+      const res = await fetch(`${base}/api/admin/uploads`, upInit);
+      redirectIfSessionExpired(res, upInit);
       if (!res.ok) throw new Error(await res.text());
       const data = (await res.json()) as { url: string };
       return `${base}${data.url}`;
@@ -143,12 +152,6 @@ export function CouponEditPanel({
 
   return (
     <div className="space-y-6">
-      {mounted && !token ? (
-        <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
-          ログイン情報がありません。先にログインしてください。
-        </div>
-      ) : null}
-
       {invalidId ? (
         <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
           不正な ID です。

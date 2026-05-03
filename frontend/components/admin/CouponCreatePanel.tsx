@@ -3,9 +3,18 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { apiGet, apiPost, type Campaign, type Coupon } from "../../lib/api";
+import {
+  apiGet,
+  apiPost,
+  fetchAdminCampaignsAllForSelect,
+  fetchAdminTenantsAllForSelect,
+  redirectIfSessionExpired,
+  type Campaign,
+  type Coupon,
+} from "../../lib/api";
 import { COUPON_LP_DEFAULT_TITLE } from "../../lib/couponLp";
 import { resolveMediaUrl } from "../../lib/products";
+import { useRedirectIfMissingAdminToken } from "../../lib/useRedirectIfMissingAdminToken";
 
 type TenantRow = { id: number; name: string };
 
@@ -56,13 +65,13 @@ export function CouponCreatePanel({
     setRole(localStorage.getItem("admin_role") ?? "");
   }, []);
 
+  useRedirectIfMissingAdminToken(mounted, token);
+
   useEffect(() => {
     if (!token || role !== "sysadmin") return;
     (async () => {
       try {
-        const rows = await apiGet<TenantRow[]>("/admin/tenants", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const rows = await fetchAdminTenantsAllForSelect(token);
         setTenants(rows);
         if (rows.length === 1) setTenantIdForCreate(String(rows[0].id));
       } catch {
@@ -75,9 +84,7 @@ export function CouponCreatePanel({
     if (!token) return;
     (async () => {
       try {
-        const c = await apiGet<Campaign[]>("/admin/campaigns", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const c = await fetchAdminCampaignsAllForSelect(token);
         setCampaigns(c);
       } catch {
         setCampaigns([]);
@@ -99,11 +106,13 @@ export function CouponCreatePanel({
         "http://localhost:8001";
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch(`${base}/api/admin/uploads`, {
+      const upInit: RequestInit = {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
-      });
+      };
+      const res = await fetch(`${base}/api/admin/uploads`, upInit);
+      redirectIfSessionExpired(res, upInit);
       if (!res.ok) throw new Error(await res.text());
       const data = (await res.json()) as { url: string };
       return `${base}${data.url}`;
@@ -113,12 +122,6 @@ export function CouponCreatePanel({
 
   return (
     <div className="space-y-6">
-      {mounted && !token ? (
-        <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
-          ログイン情報がありません。先にログインしてください。
-        </div>
-      ) : null}
-
       <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
         {role === "sysadmin" ? (
           <label className="block text-sm text-slate-200">

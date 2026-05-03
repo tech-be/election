@@ -119,9 +119,9 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   if (isLogin) return <>{children}</>;
 
   return (
-    <div className="flex min-h-screen w-full flex-col lg:flex-row">
-      <aside className="w-full shrink-0 border-slate-800 bg-slate-900/40 px-4 py-6 lg:w-[240px] lg:border-r lg:py-10 lg:pl-6 lg:pr-4">
-        <div className="space-y-1">
+    <div className="flex h-[100dvh] max-h-[100dvh] min-h-0 w-full flex-col overflow-hidden lg:flex-row">
+      <aside className="flex max-h-[min(42vh,22rem)] min-h-0 w-full shrink-0 flex-col overflow-y-auto overscroll-y-contain border-slate-800 bg-slate-900/40 px-4 py-4 lg:max-h-none lg:h-full lg:w-[240px] lg:overflow-hidden lg:border-r lg:py-8 lg:pl-6 lg:pr-4">
+        <div className="shrink-0 space-y-1">
           <div className="flex items-center gap-2.5">
             <div className="relative h-9 w-9 shrink-0 overflow-hidden rounded-xl bg-slate-950 ring-1 ring-slate-800">
               <Image src="/icon.png" alt="Aquirise" fill sizes="36px" className="object-cover" />
@@ -142,17 +142,29 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           ) : null}
         </div>
 
-        <nav className="mt-4 space-y-2">
-          {nav.map((i) => {
-            const active =
-              i.href === "/admin/tenants"
-                ? pathname === "/admin/tenants"
-                : pathname === i.href || pathname.startsWith(`${i.href}/`);
-            return <NavItem key={i.href} href={i.href} label={i.label} active={active} />;
-          })}
-        </nav>
+        <div className="mt-4 min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-y-contain lg:pr-1">
+          <nav className="space-y-2">
+            {nav.map((i) => {
+              const active =
+                i.href === "/admin/tenants"
+                  ? pathname === "/admin/tenants"
+                  : pathname === i.href || pathname.startsWith(`${i.href}/`);
+              return <NavItem key={i.href} href={i.href} label={i.label} active={active} />;
+            })}
+          </nav>
 
-        <div className="mt-6 border-t border-slate-800 pt-4">
+          {role === "sysadmin" ? (
+            <div className="mt-6 border-t border-slate-800 pt-4">
+              <NavItem
+                href="/admin/system"
+                label="システム管理"
+                active={pathname === "/admin/system" || pathname.startsWith("/admin/system/")}
+              />
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-4 shrink-0 border-t border-slate-800 pt-4">
           <button
             type="button"
             className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-200 hover:border-slate-700 hover:bg-slate-950/70"
@@ -168,7 +180,9 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <section className="min-w-0 flex-1 px-4 py-6 lg:px-8 lg:py-10">{children}</section>
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-4 py-4 lg:px-8 lg:py-6">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain">{children}</div>
+      </section>
     </div>
   );
 }
