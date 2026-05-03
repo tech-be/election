@@ -5,6 +5,8 @@ export type Tenant = {
   coupons_enabled: boolean;
   /** テナントあたり作成可能な企画数の上限（既定 3） */
   max_campaigns: number;
+  /** テナントあたり登録できるクーポン（マスタ）数の上限（既定 10・未マイグレーション時は欠ける場合あり） */
+  max_coupons?: number;
   /** 任意（未設定時は null） */
   phone?: string | null;
   address?: string | null;
@@ -108,6 +110,8 @@ export type Coupon = {
   /** 発行開始日 / 利用終了日（未設定なら制限なし） */
   issue_starts_at?: string | null;
   use_ends_at?: string | null;
+  /** 投票連動で発行できる上限件数（CouponIssue の件数・既定 10） */
+  max_distribution_count?: number;
   /** 管理画面向けテスト用トークン */
   test_token?: string | null;
   created_at: string;

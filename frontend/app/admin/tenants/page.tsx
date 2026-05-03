@@ -42,6 +42,7 @@ export default function AdminTenantsPage() {
   const [editPhone, setEditPhone] = useState("");
   const [editAddress, setEditAddress] = useState("");
   const [editMaxCampaigns, setEditMaxCampaigns] = useState("3");
+  const [editMaxCoupons, setEditMaxCoupons] = useState("10");
   const [editSaving, setEditSaving] = useState(false);
   /** クーポンON時の不足項目など */
   const [couponGateModalMessage, setCouponGateModalMessage] = useState<string | null>(null);
@@ -361,6 +362,7 @@ export default function AdminTenantsPage() {
                       setEditPhone((t.phone ?? "").trim());
                       setEditAddress((t.address ?? "").trim());
                       setEditMaxCampaigns(String(t.max_campaigns ?? 3));
+                      setEditMaxCoupons(String(t.max_coupons ?? 10));
                       setError(null);
                     }}
                   >
@@ -434,6 +436,20 @@ export default function AdminTenantsPage() {
               />
               <p className="mt-1 text-xs text-slate-500">このテナントで作成できる企画の上限です（0〜10000）。</p>
             </label>
+            <label className="block text-sm text-slate-200">
+              最大クーポン登録数
+              <input
+                type="number"
+                min={0}
+                max={10000}
+                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+                value={editMaxCoupons}
+                onChange={(e) => setEditMaxCoupons(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                このテナントで登録できるクーポン（マスタ）の上限です（0〜10000）。
+              </p>
+            </label>
             <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
               <button
                 type="button"
@@ -459,6 +475,16 @@ export default function AdminTenantsPage() {
                     setError("最大企画数は 0 以上 10000 以下の整数で入力してください");
                     return;
                   }
+                  const mxTrim = editMaxCoupons.trim();
+                  if (!mxTrim) {
+                    setError("最大クーポン登録数を入力してください");
+                    return;
+                  }
+                  const mxParsed = Number(mxTrim);
+                  if (!Number.isFinite(mxParsed) || !Number.isInteger(mxParsed) || mxParsed < 0 || mxParsed > 10000) {
+                    setError("最大クーポン登録数は 0 以上 10000 以下の整数で入力してください");
+                    return;
+                  }
                   setEditSaving(true);
                   setError(null);
                   try {
@@ -471,6 +497,7 @@ export default function AdminTenantsPage() {
                         phone: phoneTrim ? phoneTrim : null,
                         address: addrTrim ? addrTrim : null,
                         max_campaigns: mcParsed,
+                        max_coupons: mxParsed,
                       },
                       { headers: { Authorization: `Bearer ${token}` } },
                     );

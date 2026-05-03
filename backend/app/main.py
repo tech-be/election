@@ -9,9 +9,10 @@ import uuid
 import hashlib
 import secrets
 import string
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +32,11 @@ from app.admin_operation_audit import (
 from app.auth import get_current_user, require_campaign_manager, require_sysadmin
 from app.db import get_session
 from app.mail_smtp import is_smtp_configured, send_smtp_message, smtp_settings
+from app.user_credentials import (
+    EMAIL_DUPLICATE_MSG,
+    registration_email_violation,
+    registration_password_violation,
+)
 from app.models import (
     INQUIRY_STATUS_VALUES,
     AdminOperationLog,
@@ -45,6 +51,7 @@ from app.models import (
     CouponUpdate,
     Inquiry,
     InquiryCreate,
+    PasswordResetToken,
     SessionToken,
     Tenant,
     User,
@@ -57,9 +64,58 @@ logger = logging.getLogger(__name__)
 # 問い合わせ者への自動返信件名（SMTP 設定済みのとき送信）
 _INQUIRY_AUTO_REPLY_SUBJECT = "アキライズ：お問い合わせありがとうございます"
 
+# テナント管理者／ユーザー追加時の招待メール件名（SMTP 設定済みのとき送信）
+_NEW_USER_INVITE_SUBJECT = "アキライズ：管理画面ログイン情報のご案内"
+
 LP_BACKGROUND_KEYS = frozenset(
     ("pastel_lavender", "pastel_mint", "pastel_peach", "pastel_sky", "pastel_lemon"),
 )
+
+
+def _new_user_invite_opener(recipient_email: str) -> str:
+    em = (recipient_email or "").strip().lower()
+    if "@" not in em:
+        return "ご担当者様"
+    local = em.split("@", 1)[0].strip()
+    if not local or len(local) > 48:
+        return "ご担当者様"
+    if re.fullmatch(r"[a-zA-Z0-9._-]+", local):
+        return f"{local}様"
+    return "ご担当者様"
+
+
+def _send_new_user_invite_email(
+    recipient_email: str,
+    password_plain: str,
+    *,
+    tenant: Tenant,
+) -> None:
+    if not is_smtp_configured():
+        logger.info("new user invite mail skipped (smtp not configured) to=%s", recipient_email)
+        return
+    login_url = (os.getenv("ADMIN_LOGIN_URL") or "").strip()
+    if not login_url:
+        logger.warning(
+            "ADMIN_LOGIN_URL unset; invite mail omits login URL line to=%s",
+            recipient_email,
+        )
+        login_line = "（環境変数 ADMIN_LOGIN_URL が未設定のため記載できません。管理者にお問い合わせください。）"
+    else:
+        login_line = login_url
+    opener = _new_user_invite_opener(recipient_email)
+    body = (
+        f"{opener}\n\n"
+        "以下メールアドレスを追加しました。\n\n"
+        f"　対象テナント：{tenant.name}\n"
+        f"　メールアドレス：{recipient_email}\n"
+        f"　パスワード：{password_plain}\n\n"
+        f"　ログインURL：{login_line}\n\n"
+        "不明点は、お問い合わせフォームからお願いいたします。\n"
+    )
+    try:
+        send_smtp_message(to=[recipient_email], subject=_NEW_USER_INVITE_SUBJECT, text=body)
+    except Exception:
+        logger.exception("new user invite mail failed to=%s", recipient_email)
 
 
 class AdminAgentsRunRequest(BaseModel):
@@ -179,6 +235,28 @@ def _clamp_vote_max_products(raw: int | None) -> int:
     if n < 1 or n > 10:
         raise HTTPException(status_code=400, detail="vote_max_products must be 1..10")
     return n
+
+
+_COUPON_MAX_DISTRIBUTION_MIN = 1
+_COUPON_MAX_DISTRIBUTION_MAX = 1_000_000
+
+
+def _normalize_coupon_max_distribution(raw: int | None, *, default: int = 10) -> int:
+    if raw is None:
+        return default
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="max_distribution_count must be an integer")
+    if v < _COUPON_MAX_DISTRIBUTION_MIN or v > _COUPON_MAX_DISTRIBUTION_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"max_distribution_count must be between {_COUPON_MAX_DISTRIBUTION_MIN} "
+                f"and {_COUPON_MAX_DISTRIBUTION_MAX}"
+            ),
+        )
+    return v
 
 
 def _validate_period(starts_at: datetime | None, ends_at: datetime | None, field_prefix: str) -> None:
@@ -527,9 +605,17 @@ def bootstrap_sysadmin(
     password = str(payload.get("password", ""))
     if not email or not password:
         raise HTTPException(status_code=400, detail="email/password required")
+    if err := registration_email_violation(email):
+        raise HTTPException(status_code=400, detail=err)
+    if err := registration_password_violation(password):
+        raise HTTPException(status_code=400, detail=err)
     row = User(email=email, password_hash=hash_password(password), role="sysadmin", tenant_id=None)
     session.add(row)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=EMAIL_DUPLICATE_MSG)
     session.refresh(row)
     return row
 
@@ -577,7 +663,7 @@ def patch_tenant(
     payload: dict,
     session: Annotated[Session, Depends(get_session)],
 ):
-    """テナント設定の更新（name / active / coupons_enabled / phone / address / max_campaigns）。"""
+    """テナント設定の更新（name / active / coupons_enabled / phone / address / max_campaigns / max_coupons）。"""
     row = session.get(Tenant, tenant_id)
     if not row:
         raise HTTPException(status_code=404, detail="tenant not found")
@@ -612,6 +698,15 @@ def patch_tenant(
         if mc < 0 or mc > 10000:
             raise HTTPException(status_code=400, detail="max_campaigns must be between 0 and 10000")
         row.max_campaigns = mc
+    if "max_coupons" in payload:
+        mx_raw = payload["max_coupons"]
+        try:
+            mx = int(mx_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="max_coupons must be an integer")
+        if mx < 0 or mx > 10000:
+            raise HTTPException(status_code=400, detail="max_coupons must be between 0 and 10000")
+        row.max_coupons = mx
     if "coupons_enabled" in payload:
         if not row.active:
             raise HTTPException(
@@ -672,11 +767,20 @@ def create_tenant_admin(
     password = str(payload.get("password", ""))
     if not email or not password:
         raise HTTPException(status_code=400, detail="email/password required")
+    if err := registration_email_violation(email):
+        raise HTTPException(status_code=400, detail=err)
+    if err := registration_password_violation(password):
+        raise HTTPException(status_code=400, detail=err)
     now = datetime.now(timezone.utc)
     row = User(email=email, password_hash=hash_password(password), role="tenant", tenant_id=tenant_id, created_at=now, updated_at=now)
     session.add(row)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=EMAIL_DUPLICATE_MSG)
     session.refresh(row)
+    _send_new_user_invite_email(email, password, tenant=tenant)
     return row
 
 
@@ -695,11 +799,20 @@ def create_tenant_user(
     password = str(payload.get("password", ""))
     if not email or not password:
         raise HTTPException(status_code=400, detail="email/password required")
+    if err := registration_email_violation(email):
+        raise HTTPException(status_code=400, detail=err)
+    if err := registration_password_violation(password):
+        raise HTTPException(status_code=400, detail=err)
     now = datetime.now(timezone.utc)
     row = User(email=email, password_hash=hash_password(password), role="user", tenant_id=tenant_id, created_at=now, updated_at=now)
     session.add(row)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=EMAIL_DUPLICATE_MSG)
     session.refresh(row)
+    _send_new_user_invite_email(email, password, tenant=tenant)
     return row
 
 
@@ -723,11 +836,15 @@ def update_tenant_user(
         em = str(email).strip().lower()
         if not em:
             raise HTTPException(status_code=400, detail="email required")
+        if err := registration_email_violation(em):
+            raise HTTPException(status_code=400, detail=err)
         row.email = em
         changed = True
     if password is not None:
         pw = str(password)
         if pw:
+            if err := registration_password_violation(pw):
+                raise HTTPException(status_code=400, detail=err)
             row.password_hash = hash_password(pw)
             changed = True
     if not changed:
@@ -739,7 +856,7 @@ def update_tenant_user(
         session.refresh(row)
     except IntegrityError:
         session.rollback()
-        raise HTTPException(status_code=400, detail="email already exists")
+        raise HTTPException(status_code=400, detail=EMAIL_DUPLICATE_MSG)
     return row
 
 
@@ -833,12 +950,12 @@ def create_public_tenant_register(
         raise HTTPException(status_code=400, detail="company_name required")
     if len(company_name) > 200:
         raise HTTPException(status_code=400, detail="company_name too long (max 200)")
-    if not email or "@" not in email or len(email) > 254:
-        raise HTTPException(status_code=400, detail="invalid email")
+    if err := registration_email_violation(email):
+        raise HTTPException(status_code=400, detail=err)
 
     dup = session.exec(select(User).where(User.email == email)).first()
     if dup:
-        raise HTTPException(status_code=409, detail="email already registered")
+        raise HTTPException(status_code=409, detail=EMAIL_DUPLICATE_MSG)
 
     password_plain = _generate_tenant_admin_password_12()
     now = datetime.now(timezone.utc)
@@ -866,7 +983,7 @@ def create_public_tenant_register(
         session.commit()
     except IntegrityError:
         session.rollback()
-        raise HTTPException(status_code=409, detail="email already registered")
+        raise HTTPException(status_code=409, detail=EMAIL_DUPLICATE_MSG)
     session.refresh(tenant)
     session.refresh(user_row)
     return {
@@ -927,6 +1044,49 @@ def _inquiry_auto_reply_body(contact_name: str) -> str:
         "可能性がありますので、あらためてのお問い合わせをいただけますと\n"
         "大変助かります。\n\n"
         "よろしくお願いいたします。\n"
+    )
+
+
+_PASSWORD_RESET_REQUEST_OK_BODY = (
+    "ご入力のメールアドレス宛に、パスワード再設定用の案内を送信しました。"
+    "メールが届かない場合は、登録済みのメールアドレスをご確認ください。"
+)
+
+_PASSWORD_RESET_MAIL_SUBJECT = "アキライズ：パスワード再設定のご案内"
+
+PASSWORD_RESET_TOKEN_TTL = timedelta(minutes=30)
+
+
+def _password_reset_public_base_url() -> str:
+    """
+    再設定リンク `{origin}/admin/reset-password?token=…` のオリジン。
+    1) PASSWORD_RESET_PUBLIC_BASE_URL
+    2) ADMIN_LOGIN_URL から scheme+host を抽出（招待メールと同じ公開ホストを流用）
+    3) CORS_ORIGINS の先頭（開発でフロントオリジンが1件のとき）
+    """
+    direct = (os.getenv("PASSWORD_RESET_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if direct:
+        return direct
+    admin_login = (os.getenv("ADMIN_LOGIN_URL") or "").strip()
+    if admin_login:
+        if "://" not in admin_login:
+            admin_login = f"https://{admin_login}"
+        parsed = urlparse(admin_login)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    for part in (os.getenv("CORS_ORIGINS") or "").split(","):
+        origin = part.strip().rstrip("/")
+        if origin:
+            return origin
+    return ""
+
+
+def _password_reset_email_body(reset_url: str) -> str:
+    return (
+        "パスワード再設定のリクエストを受け付けました。\n"
+        "以下のURLから新しいパスワードを設定できます（発行から30分以内・1回限り有効）。\n\n"
+        f"{reset_url}\n\n"
+        "心当たりがない場合は本メールを無視してください。\n"
     )
 
 
@@ -1011,6 +1171,96 @@ def create_public_inquiry(
         "auto_reply_mail_ok": auto_reply_mail_ok,
         "auto_reply_mail_error": auto_reply_mail_error,
     }
+
+
+@api_router.post("/public/password-reset/request")
+def public_password_reset_request(payload: dict, session: Annotated[Session, Depends(get_session)]):
+    """
+    登録メール宛に再設定用URL（UUID トークン付き）を送信する。
+    未登録メール・SMTP/URL 未設定時は同一の成功メッセージのみ返す（ Enumeration 対策）。
+    メール送信を試みたあと失敗した場合は 502 とエラー内容を返す。
+    """
+    email = str(payload.get("email", "")).strip().lower()
+    if err := registration_email_violation(email):
+        raise HTTPException(status_code=400, detail=err)
+    out = {"ok": True, "message": _PASSWORD_RESET_REQUEST_OK_BODY}
+    user = session.exec(select(User).where(User.email == email)).first()
+    if not user:
+        logger.info("password reset request: no user for email (silent ok)")
+        return out
+    uid = user.id
+    if uid is None:
+        logger.warning("password reset request: user row missing id")
+        return out
+    if not is_smtp_configured():
+        logger.warning("password reset request: SMTP not configured, skip send email=%s", email)
+        return out
+    base = _password_reset_public_base_url()
+    if not base:
+        logger.warning(
+            "password reset request: no public origin for reset link "
+            "(set PASSWORD_RESET_PUBLIC_BASE_URL or ADMIN_LOGIN_URL or CORS_ORIGINS), skip send email=%s",
+            email,
+        )
+        return out
+    token_str = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    row = PasswordResetToken(token=token_str, user_id=int(uid), created_at=now)
+    session.add(row)
+    session.flush()
+    reset_url = f"{base.rstrip('/')}/admin/reset-password?token={token_str}"
+    try:
+        logger.info("password reset request: sending mail to=%s", email)
+        send_smtp_message(
+            to=[email],
+            subject=_PASSWORD_RESET_MAIL_SUBJECT,
+            text=_password_reset_email_body(reset_url),
+        )
+        session.commit()
+        logger.info("password reset request: mail sent and token committed to=%s", email)
+    except Exception as e:
+        session.rollback()
+        logger.exception("password reset mail failed email=%s: %s", email, e)
+        hint = _safe_mail_error_message(e)
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "パスワード再設定用メールの送信に失敗しました。"
+                "時間をおいて再度お試しください。\n"
+                f"（{hint}）"
+            ),
+        ) from None
+    return out
+
+
+@api_router.post("/public/password-reset/complete")
+def public_password_reset_complete(payload: dict, session: Annotated[Session, Depends(get_session)]):
+    token = str(payload.get("token", "")).strip()
+    new_password = str(payload.get("new_password", ""))
+    if not token or not new_password:
+        raise HTTPException(status_code=400, detail="token と new_password が必要です。")
+    if err := registration_password_violation(new_password):
+        raise HTTPException(status_code=400, detail=err)
+    pr = session.get(PasswordResetToken, token)
+    if not pr:
+        raise HTTPException(status_code=400, detail="無効または期限切れの再設定リンクです。")
+    if pr.used_at is not None:
+        raise HTTPException(status_code=400, detail="この再設定リンクはすでに使用されています。")
+    now = datetime.now(timezone.utc)
+    if pr.created_at + PASSWORD_RESET_TOKEN_TTL < now:
+        raise HTTPException(status_code=400, detail="再設定リンクの有効期限が切れています。再度お手続きください。")
+    user = session.get(User, pr.user_id)
+    if not user:
+        raise HTTPException(status_code=400, detail="無効または期限切れの再設定リンクです。")
+    user.password_hash = hash_password(new_password)
+    user.updated_at = now
+    pr.used_at = now
+    for st in session.exec(select(SessionToken).where(SessionToken.user_id == user.id)).all():
+        session.delete(st)
+    session.add(user)
+    session.add(pr)
+    session.commit()
+    return {"ok": True}
 
 
 @api_router.get("/admin/inquiries", dependencies=[Depends(require_sysadmin)])
@@ -1557,6 +1807,12 @@ def submit_vote(
     for cp in coupons_linked:
         if not _in_period(now, getattr(cp, "issue_starts_at", None), getattr(cp, "use_ends_at", None)):
             continue
+        cap = int(getattr(cp, "max_distribution_count", 10) or 10)
+        issued = int(
+            session.scalar(select(func.count(CouponIssue.id)).where(CouponIssue.coupon_id == cp.id)) or 0
+        )
+        if issued >= cap:
+            continue
         minted: str | None = None
         for _ in range(10):
             tok = _mint_unique_coupon_issue_token(session)
@@ -1973,6 +2229,21 @@ def create_coupon(
 
     _assert_tenant_coupons_feature(session, tid, user)
 
+    tenant_row = session.get(Tenant, tid)
+    if not tenant_row:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    max_coupons_allowed = int(getattr(tenant_row, "max_coupons", 10))
+    cur_coupon_count = int(session.scalar(select(func.count(Coupon.id)).where(Coupon.tenant_id == tid)) or 0)
+    if cur_coupon_count >= max_coupons_allowed:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "coupon_limit_exceeded",
+                "max_coupons": max_coupons_allowed,
+                "current_count": cur_coupon_count,
+            },
+        )
+
     img = str(payload.image_url).strip() if payload.image_url else None
     if img == "":
         img = None
@@ -1990,6 +2261,7 @@ def create_coupon(
 
     now = datetime.now(timezone.utc)
     _validate_period(payload.issue_starts_at, payload.use_ends_at, "coupon")
+    mdist = _normalize_coupon_max_distribution(getattr(payload, "max_distribution_count", None))
     test_token = _mint_unique_coupon_test_token(session)
     row = Coupon(
         tenant_id=tid,
@@ -2000,6 +2272,7 @@ def create_coupon(
         lp_title=lp_title,
         issue_starts_at=payload.issue_starts_at,
         use_ends_at=payload.use_ends_at,
+        max_distribution_count=mdist,
         test_token=test_token,
         created_at=now,
         updated_at=now,
@@ -2152,6 +2425,21 @@ def update_coupon(
             c = session.get(Campaign, row.campaign_id)
             if not c or c.tenant_id != new_tid:
                 data["campaign_id"] = None
+
+    if "max_distribution_count" in data:
+        raw_mc = data["max_distribution_count"]
+        if raw_mc is None:
+            raise HTTPException(status_code=400, detail="max_distribution_count cannot be null")
+        v = _normalize_coupon_max_distribution(raw_mc, default=10)
+        issued = int(
+            session.scalar(select(func.count(CouponIssue.id)).where(CouponIssue.coupon_id == row.id)) or 0
+        )
+        if v < issued:
+            raise HTTPException(
+                status_code=400,
+                detail=f"max_distribution_count must be >= current issued count ({issued})",
+            )
+        data["max_distribution_count"] = v
 
     if not data:
         return row

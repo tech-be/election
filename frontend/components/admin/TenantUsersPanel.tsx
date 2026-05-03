@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { apiDelete, apiGet, apiPatch, apiPost } from "../../lib/api";
+import { formatUserSaveApiError } from "../../lib/formatApiError";
+import {
+  registrationEmailViolation,
+  registrationPasswordViolation,
+} from "../../lib/userCredentials";
 import { Modal } from "./Modal";
 
 type UserRow = {
@@ -44,6 +49,8 @@ export function TenantUsersPanel({
   const [createEmail, setCreateEmail] = useState("");
   const [createPassword, setCreatePassword] = useState("");
   const [creating, setCreating] = useState(false);
+  const [createErrorDialog, setCreateErrorDialog] = useState<string | null>(null);
+  const [createSuccessDialogOpen, setCreateSuccessDialogOpen] = useState(false);
 
   const canCreateTenantAdmin = viewerRole === "sysadmin";
 
@@ -117,6 +124,8 @@ export function TenantUsersPanel({
               setCreateEmail("");
               setCreatePassword("");
               setError(null);
+              setCreateErrorDialog(null);
+              setCreateSuccessDialogOpen(false);
             }}
           >
             ユーザ追加
@@ -202,9 +211,11 @@ export function TenantUsersPanel({
         <Modal
           title={createTitle}
           maxWidthClassName="max-w-lg"
+          closeOnEscape={!createErrorDialog}
           onClose={() => {
             if (creating) return;
             setCreateOpen(false);
+            setCreateErrorDialog(null);
           }}
         >
           <div className="space-y-4">
@@ -222,7 +233,7 @@ export function TenantUsersPanel({
                 </select>
               </label>
             ) : (
-              <div className="text-xs text-slate-400">権限: ユーザ権限（テナント権限の作成はシスアドのみ）</div>
+              <div className="text-xs text-slate-400">権限: ユーザ権限</div>
             )}
 
             <label className="block text-sm text-slate-200">
@@ -246,6 +257,9 @@ export function TenantUsersPanel({
                 placeholder="password"
                 disabled={creating}
               />
+              <span className="mt-1 block text-xs text-slate-500">
+                英数記号を組み合わせ最低8文字以上
+              </span>
             </label>
 
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -253,7 +267,10 @@ export function TenantUsersPanel({
                 type="button"
                 className="rounded-xl border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
                 disabled={creating}
-                onClick={() => setCreateOpen(false)}
+                onClick={() => {
+                  setCreateOpen(false);
+                  setCreateErrorDialog(null);
+                }}
               >
                 キャンセル
               </button>
@@ -262,8 +279,19 @@ export function TenantUsersPanel({
                 className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-60"
                 disabled={creating || createEmail.trim().length === 0 || createPassword.length === 0}
                 onClick={async () => {
+                  const em = createEmail.trim().toLowerCase();
+                  const emailErr = registrationEmailViolation(em);
+                  if (emailErr) {
+                    setCreateErrorDialog(emailErr);
+                    return;
+                  }
+                  const pwErr = registrationPasswordViolation(createPassword);
+                  if (pwErr) {
+                    setCreateErrorDialog(pwErr);
+                    return;
+                  }
                   setCreating(true);
-                  setError(null);
+                  setCreateErrorDialog(null);
                   try {
                     const roleToCreate: CreateRole = canCreateTenantAdmin ? createRole : "user";
                     const path =
@@ -272,13 +300,16 @@ export function TenantUsersPanel({
                         : `/admin/tenants/${tenantId}/users`;
                     const u = await apiPost<UserRow>(
                       path,
-                      { email: createEmail.trim(), password: createPassword },
+                      { email: em, password: createPassword },
                       { headers: { Authorization: `Bearer ${token}` } },
                     );
                     setUsers((prev) => [u, ...prev]);
                     setCreateOpen(false);
-                  } catch {
-                    setError("作成に失敗しました（メール重複/権限不足の可能性）");
+                    setCreateSuccessDialogOpen(true);
+                  } catch (e) {
+                    setCreateErrorDialog(
+                      formatUserSaveApiError(e, "作成に失敗しました（権限不足の可能性があります）"),
+                    );
                   } finally {
                     setCreating(false);
                   }
@@ -287,6 +318,29 @@ export function TenantUsersPanel({
                 {creating ? "作成中…" : "作成"}
               </button>
             </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {createErrorDialog ? (
+        <Modal
+          title="エラー"
+          maxWidthClassName="max-w-md"
+          onClose={() => setCreateErrorDialog(null)}
+        >
+          <p className="whitespace-pre-wrap text-sm text-rose-200">{createErrorDialog}</p>
+        </Modal>
+      ) : null}
+
+      {createSuccessDialogOpen ? (
+        <Modal
+          title="お知らせ"
+          maxWidthClassName="max-w-md"
+          onClose={() => setCreateSuccessDialogOpen(false)}
+        >
+          <div className="space-y-3 text-sm text-slate-200">
+            <p>正常に登録しました。</p>
+            <p>登録ユーザにログイン情報をメールで送信しました</p>
           </div>
         </Modal>
       ) : null}
@@ -323,6 +377,9 @@ export function TenantUsersPanel({
                 placeholder="空欄のままなら変更しません"
                 autoComplete="new-password"
               />
+              <span className="mt-1 block text-xs text-slate-500">
+                英数記号を組み合わせ最低8文字以上
+              </span>
             </label>
           </div>
           <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -340,10 +397,23 @@ export function TenantUsersPanel({
               disabled={editSaving || editEmail.trim().length === 0}
               onClick={async () => {
                 if (!editingUser) return;
+                const em = editEmail.trim().toLowerCase();
+                const emailErr = registrationEmailViolation(em);
+                if (emailErr) {
+                  setError(emailErr);
+                  return;
+                }
+                if (editPassword.length > 0) {
+                  const pwErr = registrationPasswordViolation(editPassword);
+                  if (pwErr) {
+                    setError(pwErr);
+                    return;
+                  }
+                }
                 setEditSaving(true);
                 setError(null);
                 try {
-                  const body: { email: string; password?: string } = { email: editEmail.trim().toLowerCase() };
+                  const body: { email: string; password?: string } = { email: em };
                   if (editPassword.length > 0) body.password = editPassword;
                   const updated = await apiPatch<UserRow>(
                     `/admin/tenants/${tenantId}/users/${editingUser.id}`,

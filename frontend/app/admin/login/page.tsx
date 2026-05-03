@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -68,6 +69,11 @@ export default function AdminLoginPage() {
         {error ? (
           <div className="mt-3 text-sm text-rose-300">{error}</div>
         ) : null}
+        <p className="mt-3 text-right text-sm">
+          <Link href="/admin/forgot-password" className="text-indigo-300 underline-offset-2 hover:underline">
+            パスワードをお忘れの方はこちら
+          </Link>
+        </p>
         <button
           className="mt-5 inline-flex w-full items-center justify-center rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-60"
           disabled={loading || password.length === 0}

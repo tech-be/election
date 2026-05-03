@@ -7,19 +7,23 @@ export function Modal({
   children,
   onClose,
   maxWidthClassName = "max-w-5xl",
+  closeOnEscape = true,
 }: {
   title: string;
   children: React.ReactNode;
   onClose: () => void;
   maxWidthClassName?: string;
+  /** false のとき Esc で閉じない（重ねたモーダル用） */
+  closeOnEscape?: boolean;
 }) {
   useEffect(() => {
+    if (!closeOnEscape) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [onClose, closeOnEscape]);
 
   return (
     <div

@@ -115,8 +115,11 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     return items;
   }, [role, tenantScopeId]);
 
-  const isLogin = pathname === "/admin/login";
-  if (isLogin) return <>{children}</>;
+  const isBareAdminPage =
+    pathname === "/admin/login" ||
+    pathname === "/admin/forgot-password" ||
+    pathname === "/admin/reset-password";
+  if (isBareAdminPage) return <>{children}</>;
 
   return (
     <div className="flex h-[100dvh] max-h-[100dvh] min-h-0 w-full flex-col overflow-hidden lg:flex-row">

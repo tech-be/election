@@ -22,6 +22,8 @@ class Tenant(SQLModel, table=True):
     coupons_enabled: bool = Field(default=False)
     # テナントあたり作成可能な企画数の上限（シスアドが変更可能）
     max_campaigns: int = Field(default=3)
+    # テナントあたり登録できるクーポン（マスタ）数の上限
+    max_coupons: int = Field(default=10)
     # 任意（画面入力なし想定。シスアドAPIやDBで設定）
     phone: Optional[str] = Field(default=None, max_length=64)
     address: Optional[str] = Field(default=None, max_length=2000)
@@ -50,6 +52,17 @@ class SessionToken(SQLModel, table=True):
     user_id: int = Field(foreign_key="users.id", index=True)
     created_at: datetime = Field(default_factory=utcnow)
     expires_at: Optional[datetime] = None
+
+
+class PasswordResetToken(SQLModel, table=True):
+    """管理画面ログイン用パスワード再設定。URL に含める UUID を PK とし、発行時刻・使用済み時刻を保持する。"""
+
+    __tablename__ = "password_reset_tokens"
+
+    token: str = Field(primary_key=True, max_length=36)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+    used_at: Optional[datetime] = Field(default=None, index=True)
 
 
 class CampaignKind(SQLModel, table=True):
@@ -180,6 +193,8 @@ class Coupon(SQLModel, table=True):
     use_ends_at: Optional[datetime] = Field(default=None)
     # 管理画面向けのテスト用クーポンURLトークン（期間内のみ有効）
     test_token: Optional[str] = Field(default=None, max_length=64, unique=True, index=True)
+    # 投票連動で発行できるクーポン（CouponIssue）の上限件数
+    max_distribution_count: int = Field(default=10)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -194,6 +209,7 @@ class CouponCreate(SQLModel):
     test_token: Optional[str] = None
     tenant_id: Optional[int] = None
     campaign_id: Optional[int] = None
+    max_distribution_count: Optional[int] = None
 
 
 class CouponUpdate(SQLModel):
@@ -206,6 +222,7 @@ class CouponUpdate(SQLModel):
     test_token: Optional[str] = None
     tenant_id: Optional[int] = None
     campaign_id: Optional[int] = None
+    max_distribution_count: Optional[int] = None
 
 
 class CouponIssue(SQLModel, table=True):
