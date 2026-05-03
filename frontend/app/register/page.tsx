@@ -31,12 +31,14 @@ export default function RegisterPage() {
         <div className="mx-auto w-full max-w-[828px] bg-sky-100 px-4 py-10">
           <main className="space-y-8">
             <header className="space-y-4">
-              <Link
-                href="/"
-                className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900"
-              >
-                <span className="text-slate-500">←</span> サービス紹介に戻る
-              </Link>
+              <div className="flex justify-end">
+                <Link
+                  href="/"
+                  className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
+                >
+                  戻る
+                </Link>
+              </div>
               <div className="flex items-center gap-4">
                 <div className="relative h-14 w-14 overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200">
                   <Image src="/icon.png" alt="Aquirise" fill sizes="56px" className="object-cover" priority />
