@@ -3,14 +3,44 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { Modal } from "../../components/admin/Modal";
 import { ProductModal, type ProductDraft } from "../../components/admin/ProductModal";
-import { apiGet, apiPost, type Campaign } from "../../lib/api";
+import {
+  apiGet,
+  apiPost,
+  fetchAdminTenantsAllForSelect,
+  redirectIfSessionExpired,
+  type Campaign,
+  type CampaignKind,
+} from "../../lib/api";
 import { LP_BACKGROUND_OPTIONS } from "../../lib/lpBackgrounds";
 import { DEFAULT_NO_LANDING_END_MESSAGE } from "../../lib/noLandingEndMessage";
 import { resolveMediaUrl } from "../../lib/products";
 import { DEFAULT_VOTE_CONFIRM_BODY_TEMPLATE, DEFAULT_VOTE_CONFIRM_TITLE } from "../../lib/voteConfirmModal";
+import { useRedirectIfMissingAdminToken } from "../../lib/useRedirectIfMissingAdminToken";
 
-type TenantRow = { id: number; name: string };
+type TenantRow = { id: number; name: string; max_campaigns?: number };
+
+function parseCampaignLimitExceeded(err: unknown): { max_campaigns: number; current_count: number } | null {
+  if (!(err instanceof Error) || !err.message.trim()) return null;
+  try {
+    const j = JSON.parse(err.message) as { detail?: unknown };
+    const d = j.detail;
+    if (d && typeof d === "object" && !Array.isArray(d)) {
+      const o = d as Record<string, unknown>;
+      if (o.code === "campaign_limit_exceeded") {
+        const maxVal = Number(o.max_campaigns);
+        const curVal = Number(o.current_count);
+        if (Number.isFinite(maxVal) && Number.isFinite(curVal)) {
+          return { max_campaigns: maxVal, current_count: curVal };
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 const NEW_TABS = [
   { id: "basic" as const, label: "基本情報" },
@@ -39,13 +69,13 @@ export function CampaignCreatePanel({
     setRole(localStorage.getItem("admin_role") ?? "");
   }, []);
 
+  useRedirectIfMissingAdminToken(mounted, token);
+
   useEffect(() => {
     if (!token || role !== "sysadmin") return;
     (async () => {
       try {
-        const rows = await apiGet<TenantRow[]>("/admin/tenants", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const rows = await fetchAdminTenantsAllForSelect(token);
         setTenants(rows);
         if (rows.length === 1) setTenantIdForCreate(String(rows[0].id));
       } catch {
@@ -53,6 +83,21 @@ export function CampaignCreatePanel({
       }
     })();
   }, [token, role]);
+
+  useEffect(() => {
+    if (!token) return;
+    void (async () => {
+      try {
+        const list = await apiGet<CampaignKind[]>("/admin/campaign-kinds", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        setCampaignKinds(list);
+        if (list.length === 1) setCampaignKindId(String(list[0].id));
+      } catch {
+        setCampaignKinds([]);
+      }
+    })();
+  }, [token]);
 
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
@@ -74,6 +119,9 @@ export function CampaignCreatePanel({
   const [voteConfirmBody, setVoteConfirmBody] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [campaignLimitModal, setCampaignLimitModal] = useState<string | null>(null);
+  const [campaignKinds, setCampaignKinds] = useState<CampaignKind[]>([]);
+  const [campaignKindId, setCampaignKindId] = useState("");
 
   const [newTab, setNewTab] = useState<(typeof NEW_TABS)[number]["id"]>("basic");
   const [productsModalOpen, setProductsModalOpen] = useState(false);
@@ -92,11 +140,13 @@ export function CampaignCreatePanel({
         "http://localhost:8001";
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch(`${base}/api/admin/uploads`, {
+      const upInit: RequestInit = {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
-      });
+      };
+      const res = await fetch(`${base}/api/admin/uploads`, upInit);
+      redirectIfSessionExpired(res, upInit);
       if (!res.ok) throw new Error(await res.text());
       const data = (await res.json()) as { url: string };
       return `${base}${data.url}`;
@@ -106,12 +156,6 @@ export function CampaignCreatePanel({
 
   return (
     <div className="space-y-6">
-      {mounted && !token ? (
-        <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
-          ログイン情報がありません。先にログインしてください。
-        </div>
-      ) : null}
-
       <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/40 p-6">
         <div className="mb-1 flex flex-wrap gap-1 border-b border-slate-800 pb-0" role="tablist" aria-label="企画新規の区分">
           {NEW_TABS.map((t) => {
@@ -164,6 +208,29 @@ export function CampaignCreatePanel({
                 ) : null}
               </label>
             ) : null}
+
+            <label className="block text-sm text-slate-200">
+              企画種別
+              <select
+                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+                value={campaignKindId}
+                onChange={(e) => setCampaignKindId(e.target.value)}
+                disabled={!token || campaignKinds.length === 0}
+              >
+                {campaignKinds.length === 0 ? (
+                  <option value="">読み込み中…</option>
+                ) : (
+                  <>
+                    <option value="">選択してください</option>
+                    {campaignKinds.map((k) => (
+                      <option key={k.id} value={String(k.id)}>
+                        {k.name}
+                      </option>
+                    ))}
+                  </>
+                )}
+              </select>
+            </label>
 
             <label className="text-sm text-slate-200">
               投票で選べるアイテムの最大数
@@ -535,7 +602,14 @@ export function CampaignCreatePanel({
           <button
             type="button"
             className="inline-flex flex-1 items-center justify-center rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-60"
-            disabled={!token || loading || code.length === 0 || name.length === 0 || (role === "sysadmin" && tenantIdForCreate.length === 0)}
+            disabled={
+              !token ||
+              loading ||
+              code.length === 0 ||
+              name.length === 0 ||
+              (role === "sysadmin" && tenantIdForCreate.length === 0) ||
+              (campaignKinds.length > 1 && campaignKindId === "")
+            }
             onClick={async () => {
               if (!token) return;
               setLoading(true);
@@ -562,13 +636,21 @@ export function CampaignCreatePanel({
                   vote_confirm_body: voteConfirmBody.trim() ? voteConfirmBody.trim() : null,
                 };
                 if (role === "sysadmin") body.tenant_id = Number(tenantIdForCreate);
+                if (campaignKindId) body.campaign_kind_id = Number(campaignKindId);
                 const created = await apiPost<Campaign>("/admin/campaigns", body, {
                   headers: { Authorization: `Bearer ${token}` },
                 });
                 onCreated?.(created);
                 onClose();
-              } catch {
-                setError("登録に失敗しました（コード重複 or データ形式エラーの可能性）");
+              } catch (e) {
+                const lim = parseCampaignLimitExceeded(e);
+                if (lim) {
+                  setCampaignLimitModal(
+                    `このテナントで作成できる企画は最大 ${lim.max_campaigns} 件です（現在 ${lim.current_count} 件登録済み）。`,
+                  );
+                } else {
+                  setError("登録に失敗しました（コード重複 or データ形式エラーの可能性）");
+                }
               } finally {
                 setLoading(false);
               }
@@ -580,6 +662,12 @@ export function CampaignCreatePanel({
       </section>
 
       <ProductModal open={productsModalOpen} onClose={() => setProductsModalOpen(false)} products={products} onProductsChange={setProducts} token={token} />
+
+      {campaignLimitModal ? (
+        <Modal title="企画の作成上限" onClose={() => setCampaignLimitModal(null)} maxWidthClassName="max-w-md">
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{campaignLimitModal}</p>
+        </Modal>
+      ) : null}
     </div>
   );
 }

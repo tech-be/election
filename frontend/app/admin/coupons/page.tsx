@@ -1,20 +1,31 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { apiDelete, apiGet, apiUrl, type Campaign, type Coupon } from "../../../lib/api";
+import {
+  type AdminCouponListResponse,
+  apiDelete,
+  apiGet,
+  apiUrl,
+  fetchAdminCampaignsAllForSelect,
+  fetchAdminTenantsAllForSelect,
+  redirectIfSessionExpired,
+  type Campaign,
+  type Coupon,
+} from "../../../lib/api";
 import { useCouponAdminAccess } from "../../../lib/useCouponAdminAccess";
 import { Modal } from "../../../components/admin/Modal";
 import { CouponEditPanel } from "../../../components/admin/CouponEditPanel";
 import { CouponCreatePanel } from "../../../components/admin/CouponCreatePanel";
 import { CouponFeatureDisabledNotice } from "../../../components/admin/CouponFeatureDisabledNotice";
 import { resolveMediaUrl } from "../../../lib/products";
-
-type TenantRow = { id: number; name: string };
+import { useRedirectIfMissingAdminToken } from "../../../lib/useRedirectIfMissingAdminToken";
 
 export default function AdminCouponsPage() {
-  const [rows, setRows] = useState<Coupon[]>([]);
+  const [page, setPage] = useState(1);
+  const [listData, setListData] = useState<AdminCouponListResponse | null>(null);
+  const [listLoading, setListLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [role, setRole] = useState<string>("");
@@ -34,28 +45,59 @@ export default function AdminCouponsPage() {
     setRole(localStorage.getItem("admin_role") ?? "");
   }, []);
 
-  useEffect(() => {
-    if (!token || couponAccess !== "full") return;
-    (async () => {
+  useRedirectIfMissingAdminToken(mounted, token);
+
+  const loadCouponPage = useCallback(
+    async (p: number) => {
+      if (!token || couponAccess !== "full") return;
+      setListLoading(true);
       setError(null);
       try {
-        const data = await apiGet<Coupon[]>("/admin/coupons", {
+        const q = new URLSearchParams({ page: String(p) });
+        const data = await apiGet<AdminCouponListResponse>(`/admin/coupons?${q.toString()}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        setRows(data);
+        setListData(data);
       } catch {
+        setListData(null);
         setError("取得に失敗しました");
+      } finally {
+        setListLoading(false);
       }
-    })();
-  }, [token, couponAccess]);
+    },
+    [token, couponAccess],
+  );
+
+  useEffect(() => {
+    void loadCouponPage(page);
+  }, [page, loadCouponPage]);
+
+  useEffect(() => {
+    if (!listData) return;
+    if (page > listData.total_pages) {
+      setPage(listData.total_pages);
+    }
+  }, [listData, page]);
+
+  const rows = listData?.items ?? [];
+  const totalPages = listData?.total_pages ?? 1;
+
+  const pageButtons = useMemo(() => {
+    const n = totalPages;
+    if (n <= 20) return Array.from({ length: n }, (_, i) => i + 1);
+    const windowSize = 7;
+    const half = Math.floor(windowSize / 2);
+    let start = Math.max(1, page - half);
+    let end = Math.min(n, start + windowSize - 1);
+    start = Math.max(1, end - windowSize + 1);
+    return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+  }, [totalPages, page]);
 
   useEffect(() => {
     if (!token || couponAccess !== "full") return;
     (async () => {
       try {
-        const c = await apiGet<Campaign[]>("/admin/campaigns", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const c = await fetchAdminCampaignsAllForSelect(token);
         setCampaigns(c);
       } catch {
         setCampaigns([]);
@@ -67,9 +109,7 @@ export default function AdminCouponsPage() {
     if (!token || role !== "sysadmin" || couponAccess !== "full") return;
     (async () => {
       try {
-        const tenants = await apiGet<TenantRow[]>("/admin/tenants", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const tenants = await fetchAdminTenantsAllForSelect(token);
         const map: Record<number, string> = {};
         for (const t of tenants) map[t.id] = t.name;
         setTenantNameById(map);
@@ -107,16 +147,6 @@ export default function AdminCouponsPage() {
         ) : null}
       </header>
 
-      {mounted && !token ? (
-        <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
-          ログイン情報がありません。先に{" "}
-          <Link className="underline" href="/admin/login">
-            ログイン
-          </Link>{" "}
-          してください。
-        </div>
-      ) : null}
-
       {mounted && token && couponAccess === "loading" ? (
         <div className="rounded-2xl border border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">
           読み込み中…
@@ -132,6 +162,68 @@ export default function AdminCouponsPage() {
       ) : null}
 
       {couponAccess === "full" ? (
+      <>
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-300">
+        <div>
+          {listLoading ? (
+            "読み込み中…"
+          ) : listData ? (
+            <>
+              全 {listData.total} 件 · 1ページ {listData.page_size} 件 · ページ {listData.page} / {listData.total_pages}
+            </>
+          ) : (
+            "—"
+          )}
+        </div>
+        <button
+          type="button"
+          disabled={listLoading || !token}
+          className="inline-flex items-center justify-center rounded-xl border border-slate-700 bg-slate-950 px-4 py-2 text-sm font-semibold text-slate-200 hover:border-slate-500 disabled:opacity-50"
+          onClick={() => void loadCouponPage(page)}
+        >
+          更新
+        </button>
+      </div>
+
+      {totalPages > 1 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={listLoading || page <= 1}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-200 hover:border-slate-500 disabled:opacity-40"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >
+            前へ
+          </button>
+          <div className="flex flex-wrap gap-1">
+            {pageButtons.map((p) => (
+              <button
+                key={p}
+                type="button"
+                disabled={listLoading}
+                className={[
+                  "min-w-[2.25rem] rounded-lg border px-2 py-1.5 text-sm",
+                  p === page
+                    ? "border-indigo-400/80 bg-indigo-500/20 text-indigo-100"
+                    : "border-slate-700 bg-slate-950 text-slate-200 hover:border-slate-500",
+                ].join(" ")}
+                onClick={() => setPage(p)}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            disabled={listLoading || page >= totalPages}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-200 hover:border-slate-500 disabled:opacity-40"
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >
+            次へ
+          </button>
+        </div>
+      ) : null}
+
       <section className="overflow-hidden rounded-2xl border border-slate-800">
         <div className="grid grid-cols-12 gap-0 bg-slate-900/50 px-4 py-3 text-xs text-slate-300">
           {role === "sysadmin" ? <div className="col-span-2">テナント</div> : null}
@@ -142,8 +234,10 @@ export default function AdminCouponsPage() {
           <div className="col-span-2">操作</div>
         </div>
         <div className="divide-y divide-slate-800 bg-slate-950/40">
-          {rows.length === 0 ? (
+          {rows.length === 0 && !listLoading ? (
             <div className="px-4 py-6 text-sm text-slate-300">クーポンがありません</div>
+          ) : rows.length === 0 && listLoading ? (
+            <div className="px-4 py-6 text-sm text-slate-400">読み込み中…</div>
           ) : (
             rows.map((r) => (
               <div key={r.id} className="grid grid-cols-12 gap-0 px-4 py-4 text-sm">
@@ -222,9 +316,11 @@ export default function AdminCouponsPage() {
                       setError(null);
                       void (async () => {
                         try {
-                          const res = await fetch(apiUrl(`/admin/coupons/${r.id}/issued-csv`), {
+                          const csvReq: RequestInit = {
                             headers: { Authorization: `Bearer ${token}` },
-                          });
+                          };
+                          const res = await fetch(apiUrl(`/admin/coupons/${r.id}/issued-csv`), csvReq);
+                          redirectIfSessionExpired(res, csvReq);
                           if (!res.ok) throw new Error(await res.text());
                           const blob = await res.blob();
                           const href = URL.createObjectURL(blob);
@@ -266,7 +362,7 @@ export default function AdminCouponsPage() {
                         await apiDelete<{ ok: boolean }>(`/admin/coupons/${r.id}`, {
                           headers: { Authorization: `Bearer ${token}` },
                         });
-                        setRows((prev) => prev.filter((x) => x.id !== r.id));
+                        await loadCouponPage(page);
                       } catch {
                         setError("削除に失敗しました");
                       } finally {
@@ -282,6 +378,7 @@ export default function AdminCouponsPage() {
           )}
         </div>
       </section>
+      </>
       ) : null}
 
       {editingId != null && token && couponAccess === "full" ? (
@@ -290,7 +387,16 @@ export default function AdminCouponsPage() {
             couponId={editingId}
             token={token}
             onClose={() => setEditingId(null)}
-            onSaved={(u) => setRows((prev) => prev.map((x) => (x.id === u.id ? { ...x, ...u } : x)))}
+            onSaved={(u) =>
+              setListData((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      items: prev.items.map((x) => (x.id === u.id ? { ...x, ...u } : x)),
+                    }
+                  : prev,
+              )
+            }
           />
         </Modal>
       ) : null}
@@ -300,7 +406,10 @@ export default function AdminCouponsPage() {
           <CouponCreatePanel
             token={token}
             onClose={() => setCreatingOpen(false)}
-            onCreated={(c) => setRows((prev) => [c, ...prev])}
+            onCreated={() => {
+              setPage(1);
+              void loadCouponPage(1);
+            }}
           />
         </Modal>
       ) : null}

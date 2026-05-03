@@ -1,18 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { apiDelete, apiGet, apiUrl, type Campaign, type CampaignVoteResults } from "../../../lib/api";
+import {
+  type AdminCampaignListResponse,
+  apiDelete,
+  apiGet,
+  apiUrl,
+  fetchAdminTenantsAllForSelect,
+  redirectIfSessionExpired,
+  type Campaign,
+  type CampaignVoteResults,
+  type Tenant,
+} from "../../../lib/api";
 import { Modal } from "../../../components/admin/Modal";
 import { CampaignEditPanel } from "../../../components/admin/CampaignEditPanel";
 import { CampaignCreatePanel } from "../../../components/admin/CampaignCreatePanel";
+import { PlanLimitHint } from "../../../components/admin/PlanLimitHint";
 import { resolveMediaUrl } from "../../../lib/products";
-
-type TenantRow = { id: number; name: string };
+import { useRedirectIfMissingAdminToken } from "../../../lib/useRedirectIfMissingAdminToken";
 
 export default function AdminCampaignsPage() {
-  const [rows, setRows] = useState<Campaign[]>([]);
+  const [page, setPage] = useState(1);
+  const [listData, setListData] = useState<AdminCampaignListResponse | null>(null);
+  const [listLoading, setListLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [token, setToken] = useState<string | null>(null);
@@ -27,6 +39,8 @@ export default function AdminCampaignsPage() {
   const [downloadingEmailsCode, setDownloadingEmailsCode] = useState<string | null>(null);
   const [editingCode, setEditingCode] = useState<string | null>(null);
   const [creatingOpen, setCreatingOpen] = useState(false);
+  const [campaignLimitModalText, setCampaignLimitModalText] = useState<string | null>(null);
+  const [planTenant, setPlanTenant] = useState<Tenant | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -34,28 +48,90 @@ export default function AdminCampaignsPage() {
     setRole(localStorage.getItem("admin_role") ?? "");
   }, []);
 
+  useRedirectIfMissingAdminToken(mounted, token);
+
   useEffect(() => {
     if (!token) return;
-    (async () => {
-      setError(null);
+    const rr = (role ?? "").trim().toLowerCase();
+    if (rr !== "tenant" && rr !== "user") {
+      setPlanTenant(null);
+      return;
+    }
+    const tidRaw =
+      typeof window !== "undefined" ? (localStorage.getItem("admin_tenant_id") ?? "").trim() : "";
+    const tid = tidRaw && /^\d+$/.test(tidRaw) ? Number(tidRaw) : NaN;
+    if (!Number.isFinite(tid)) {
+      setPlanTenant(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
       try {
-        const data = await apiGet<Campaign[]>("/admin/campaigns", {
+        const t = await apiGet<Tenant>(`/admin/tenants/${tid}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        setRows(data);
+        if (!cancelled) setPlanTenant(t);
       } catch {
-        setError("取得に失敗しました");
+        if (!cancelled) setPlanTenant(null);
       }
     })();
-  }, [token]);
+    return () => {
+      cancelled = true;
+    };
+  }, [token, role]);
+
+  const loadCampaignPage = useCallback(
+    async (p: number) => {
+      if (!token) return;
+      setListLoading(true);
+      setError(null);
+      try {
+        const q = new URLSearchParams({ page: String(p) });
+        const data = await apiGet<AdminCampaignListResponse>(`/admin/campaigns?${q.toString()}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        setListData(data);
+      } catch {
+        setListData(null);
+        setError("取得に失敗しました");
+      } finally {
+        setListLoading(false);
+      }
+    },
+    [token],
+  );
+
+  useEffect(() => {
+    void loadCampaignPage(page);
+  }, [page, loadCampaignPage]);
+
+  useEffect(() => {
+    if (!listData) return;
+    if (page > listData.total_pages) {
+      setPage(listData.total_pages);
+    }
+  }, [listData, page]);
+
+  const rows = listData?.items ?? [];
+  const totalPages = listData?.total_pages ?? 1;
+  const campaignTotal = listData?.total ?? 0;
+
+  const pageButtons = useMemo(() => {
+    const n = totalPages;
+    if (n <= 20) return Array.from({ length: n }, (_, i) => i + 1);
+    const windowSize = 7;
+    const half = Math.floor(windowSize / 2);
+    let start = Math.max(1, page - half);
+    let end = Math.min(n, start + windowSize - 1);
+    start = Math.max(1, end - windowSize + 1);
+    return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+  }, [totalPages, page]);
 
   useEffect(() => {
     if (!token || role !== "sysadmin") return;
     (async () => {
       try {
-        const tenants = await apiGet<TenantRow[]>("/admin/tenants", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const tenants = await fetchAdminTenantsAllForSelect(token);
         const map: Record<number, string> = {};
         for (const t of tenants) map[t.id] = t.name;
         setTenantNameById(map);
@@ -69,29 +145,62 @@ export default function AdminCampaignsPage() {
     return tenantNameById[tenantId] ?? `（ID: ${tenantId}）`;
   }
 
+  const viewerRoleLc = (role ?? "").trim().toLowerCase();
+  const showTenantPlanUsage = viewerRoleLc === "tenant" || viewerRoleLc === "user";
+
   return (
     <main className="space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
+        <div className="min-w-0 flex-1 space-y-3">
           <h1 className="text-2xl font-semibold tracking-tight">企画一覧</h1>
+          {showTenantPlanUsage ? (
+            <div className="flex flex-wrap gap-x-8 gap-y-1 text-sm leading-relaxed text-slate-300">
+              <span>
+                現在の企画数：
+                <span className="ml-1 tabular-nums font-medium text-slate-100">{campaignTotal}</span>
+              </span>
+              <PlanLimitHint valueLabel={planTenant != null ? planTenant.max_campaigns ?? 3 : "—"} />
+            </div>
+          ) : null}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           <button
             className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
             type="button"
             disabled={!token}
-            onClick={() => setCreatingOpen(true)}
+            onClick={() => {
+              if (!token) return;
+              void (async () => {
+                const rr = (role ?? "").trim().toLowerCase();
+                if (rr === "tenant" || rr === "user") {
+                  const tidRaw = (typeof window !== "undefined" ? localStorage.getItem("admin_tenant_id") : null)?.trim();
+                  const tid = tidRaw && /^\d+$/.test(tidRaw) ? Number(tidRaw) : NaN;
+                  if (Number.isFinite(tid)) {
+                    try {
+                      const t = await apiGet<Tenant>(`/admin/tenants/${tid}`, {
+                        headers: { Authorization: `Bearer ${token}` },
+                      });
+                      const max = typeof t.max_campaigns === "number" ? t.max_campaigns : 3;
+                      const count = campaignTotal;
+                      if (count >= max) {
+                        setCampaignLimitModalText(
+                          `このテナントで作成できる企画は最大 ${max} 件です（現在 ${count} 件登録済み）。\n\n上限を上げるにはプランの変更が必要です。問い合わせフォームより「プラン変更希望」としてテナント名とご担当者様のご連絡先を記載の上、お問い合わせください。`,
+                        );
+                        return;
+                      }
+                    } catch {
+                      /* 取得に失敗した場合はフォームを開き、サーバー側で検証する */
+                    }
+                  }
+                }
+                setCreatingOpen(true);
+              })();
+            }}
           >
             企画新規登録
           </button>
         </div>
       </header>
-
-      {mounted && !token ? (
-        <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
-          ログイン情報がありません。先に <Link className="underline" href="/admin/login">ログイン</Link> してください。
-        </div>
-      ) : null}
 
       {error ? (
         <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
@@ -99,18 +208,82 @@ export default function AdminCampaignsPage() {
         </div>
       ) : null}
 
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-300">
+        <div>
+          {listLoading ? (
+            "読み込み中…"
+          ) : listData ? (
+            <>
+              全 {listData.total} 件 · 1ページ {listData.page_size} 件 · ページ {listData.page} / {listData.total_pages}
+            </>
+          ) : (
+            "—"
+          )}
+        </div>
+        <button
+          type="button"
+          disabled={listLoading || !token}
+          className="inline-flex items-center justify-center rounded-xl border border-slate-700 bg-slate-950 px-4 py-2 text-sm font-semibold text-slate-200 hover:border-slate-500 disabled:opacity-50"
+          onClick={() => void loadCampaignPage(page)}
+        >
+          更新
+        </button>
+      </div>
+
+      {totalPages > 1 ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={listLoading || page <= 1}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-200 hover:border-slate-500 disabled:opacity-40"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >
+            前へ
+          </button>
+          <div className="flex flex-wrap gap-1">
+            {pageButtons.map((p) => (
+              <button
+                key={p}
+                type="button"
+                disabled={listLoading}
+                className={[
+                  "min-w-[2.25rem] rounded-lg border px-2 py-1.5 text-sm",
+                  p === page
+                    ? "border-indigo-400/80 bg-indigo-500/20 text-indigo-100"
+                    : "border-slate-700 bg-slate-950 text-slate-200 hover:border-slate-500",
+                ].join(" ")}
+                onClick={() => setPage(p)}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            disabled={listLoading || page >= totalPages}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-200 hover:border-slate-500 disabled:opacity-40"
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >
+            次へ
+          </button>
+        </div>
+      ) : null}
+
       <section className="overflow-hidden rounded-2xl border border-slate-800">
         <div className="grid grid-cols-12 gap-0 bg-slate-900/50 px-4 py-3 text-xs text-slate-300">
           {role === "sysadmin" ? <div className="col-span-3">テナント</div> : null}
           <div className={role === "sysadmin" ? "col-span-2" : "col-span-3"}>コード</div>
-          <div className={role === "sysadmin" ? "col-span-3" : "col-span-5"}>名称</div>
-          <div className="col-span-4">操作</div>
+          <div className={role === "sysadmin" ? "col-span-2" : "col-span-2"}>企画種別</div>
+          <div className={role === "sysadmin" ? "col-span-3" : "col-span-4"}>名称</div>
+          <div className={role === "sysadmin" ? "col-span-2" : "col-span-3"}>操作</div>
         </div>
         <div className="divide-y divide-slate-800 bg-slate-950/40">
-          {rows.length === 0 ? (
+          {rows.length === 0 && !listLoading ? (
             <div className="px-4 py-6 text-sm text-slate-300">
               企画がありません
             </div>
+          ) : rows.length === 0 && listLoading ? (
+            <div className="px-4 py-6 text-sm text-slate-400">読み込み中…</div>
           ) : (
             rows.map((r) => (
               <div
@@ -128,10 +301,15 @@ export default function AdminCampaignsPage() {
                 <div className={`font-mono text-slate-200 ${role === "sysadmin" ? "col-span-2" : "col-span-3"}`}>
                   {r.code}
                 </div>
-                <div className={role === "sysadmin" ? "col-span-3 text-slate-100" : "col-span-5 text-slate-100"}>
+                <div className={role === "sysadmin" ? "col-span-2 text-slate-100" : "col-span-2 text-slate-100"}>
+                  <span className="truncate" title={r.campaign_kind_name ?? ""}>
+                    {r.campaign_kind_name ?? "—"}
+                  </span>
+                </div>
+                <div className={role === "sysadmin" ? "col-span-3 text-slate-100" : "col-span-4 text-slate-100"}>
                   {r.name}
                 </div>
-                <div className="col-span-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+                <div className={`flex flex-wrap items-center gap-x-3 gap-y-2 ${role === "sysadmin" ? "col-span-2" : "col-span-3"}`}>
                   <button
                     type="button"
                     className="text-slate-200 underline hover:text-white disabled:opacity-50"
@@ -150,10 +328,14 @@ export default function AdminCampaignsPage() {
                       setError(null);
                       void (async () => {
                         try {
+                          const mailReq: RequestInit = {
+                            headers: { Authorization: `Bearer ${token}` },
+                          };
                           const res = await fetch(
                             apiUrl(`/admin/campaigns/${encodeURIComponent(r.code)}/vote-emails`),
-                            { headers: { Authorization: `Bearer ${token}` } },
+                            mailReq,
                           );
+                          redirectIfSessionExpired(res, mailReq);
                           if (!res.ok) throw new Error(await res.text());
                           const blob = await res.blob();
                           const href = URL.createObjectURL(blob);
@@ -226,7 +408,7 @@ export default function AdminCampaignsPage() {
                           `/admin/campaigns/${encodeURIComponent(r.code)}`,
                           { headers: { Authorization: `Bearer ${token}` } },
                         );
-                        setRows((prev) => prev.filter((x) => x.code !== r.code));
+                        await loadCampaignPage(page);
                       } catch {
                         setError("削除に失敗しました");
                       } finally {
@@ -345,7 +527,14 @@ export default function AdminCampaignsPage() {
             token={token}
             onClose={() => setEditingCode(null)}
             onSaved={(u) => {
-              setRows((prev) => prev.map((x) => (x.code === u.code ? { ...x, ...u } : x)));
+              setListData((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      items: prev.items.map((x) => (x.code === u.code ? { ...x, ...u } : x)),
+                    }
+                  : prev,
+              );
             }}
           />
         </Modal>
@@ -356,8 +545,17 @@ export default function AdminCampaignsPage() {
           <CampaignCreatePanel
             token={token}
             onClose={() => setCreatingOpen(false)}
-            onCreated={(c) => setRows((prev) => [c, ...prev])}
+            onCreated={() => {
+              setPage(1);
+              void loadCampaignPage(1);
+            }}
           />
+        </Modal>
+      ) : null}
+
+      {campaignLimitModalText ? (
+        <Modal title="企画の作成上限" onClose={() => setCampaignLimitModalText(null)} maxWidthClassName="max-w-md">
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-200">{campaignLimitModalText}</p>
         </Modal>
       ) : null}
     </main>

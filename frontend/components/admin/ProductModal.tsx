@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 
-import { apiPatch, type Campaign } from "../../lib/api";
+import { apiPatch, redirectIfSessionExpired, type Campaign } from "../../lib/api";
 import { parseProductsJson, productsToJson, resolveMediaUrl, type ProductDraft } from "../../lib/products";
 
 export type { ProductDraft } from "../../lib/products";
@@ -159,13 +159,15 @@ export function ProductModal({
         "http://localhost:8001";
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch(`${base}/api/admin/uploads`, {
+      const upInit: RequestInit = {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
         },
         body: fd,
-      });
+      };
+      const res = await fetch(`${base}/api/admin/uploads`, upInit);
+      redirectIfSessionExpired(res, upInit);
       if (!res.ok) throw new Error(await res.text());
       const data = (await res.json()) as { url: string };
       return `${base}${data.url}`;

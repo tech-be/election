@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { TenantUsersPanel } from "../../../../components/admin/TenantUsersPanel";
+import { useRedirectIfMissingAdminToken } from "../../../../lib/useRedirectIfMissingAdminToken";
 
 export default function AdminTenantUsersPage() {
   // NOTE: This page is kept for direct navigation (and for tenant-role users via side menu).
@@ -22,6 +23,8 @@ export default function AdminTenantUsersPage() {
     setViewerRole((localStorage.getItem("admin_role") ?? "").trim().toLowerCase());
   }, [tenantId]);
 
+  useRedirectIfMissingAdminToken(mounted, token);
+
   useEffect(() => {
     if (!mounted) return;
     if (viewerRole !== "tenant") return;
@@ -33,12 +36,6 @@ export default function AdminTenantUsersPage() {
 
   return (
     <main className="w-full max-w-none space-y-6">
-      {mounted && !token ? (
-        <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
-          ログイン情報がありません。先にログインしてください。
-        </div>
-      ) : null}
-
       {mounted && token && Number.isFinite(tenantId) ? (
         <TenantUsersPanel tenantId={tenantId} token={token} viewerRole={viewerRole} />
       ) : null}

@@ -8,7 +8,7 @@ import {
   productsToJson,
   type ProductDraft,
 } from "../../components/admin/ProductModal";
-import { apiGet, apiPatch, type Campaign } from "../../lib/api";
+import { apiGet, apiPatch, redirectIfSessionExpired, type Campaign, type CampaignKind } from "../../lib/api";
 import { LP_BACKGROUND_OPTIONS } from "../../lib/lpBackgrounds";
 import { resolveMediaUrl } from "../../lib/products";
 import { DEFAULT_NO_LANDING_END_MESSAGE } from "../../lib/noLandingEndMessage";
@@ -17,6 +17,7 @@ import {
   DEFAULT_VOTE_CONFIRM_TITLE,
 } from "../../lib/voteConfirmModal";
 import { clampVoteMaxProducts } from "../../lib/voteSelection";
+import { useRedirectIfMissingAdminToken } from "../../lib/useRedirectIfMissingAdminToken";
 
 const EDIT_TABS = [
   { id: "basic" as const, label: "基本情報" },
@@ -58,6 +59,8 @@ export function CampaignEditPanel({
   const [emailRequired, setEmailRequired] = useState(true);
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
+  const [campaignKinds, setCampaignKinds] = useState<CampaignKind[]>([]);
+  const [campaignKindId, setCampaignKindId] = useState("");
 
   const [keyVisualUploading, setKeyVisualUploading] = useState(false);
   const [keyVisualInputNonce, setKeyVisualInputNonce] = useState(0);
@@ -65,6 +68,27 @@ export function CampaignEditPanel({
   const [lpIntroInputNonce, setLpIntroInputNonce] = useState(0);
   const [saveSuccessOpen, setSaveSuccessOpen] = useState(false);
   const [editTab, setEditTab] = useState<(typeof EDIT_TABS)[number]["id"]>("basic");
+
+  useRedirectIfMissingAdminToken(true, token);
+
+  useEffect(() => {
+    if (!token) return;
+    void (async () => {
+      try {
+        const list = await apiGet<CampaignKind[]>("/admin/campaign-kinds", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        setCampaignKinds(list);
+      } catch {
+        setCampaignKinds([]);
+      }
+    })();
+  }, [token]);
+
+  useEffect(() => {
+    if (campaignKinds.length !== 1) return;
+    setCampaignKindId((prev) => (prev === "" ? String(campaignKinds[0].id) : prev));
+  }, [campaignKinds]);
 
   const uploadImage = useCallback(
     async (file: File) => {
@@ -75,11 +99,13 @@ export function CampaignEditPanel({
         "http://localhost:8001";
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch(`${base}/api/admin/uploads`, {
+      const upInit: RequestInit = {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
-      });
+      };
+      const res = await fetch(`${base}/api/admin/uploads`, upInit);
+      redirectIfSessionExpired(res, upInit);
       if (!res.ok) throw new Error(await res.text());
       const data = (await res.json()) as { url: string };
       return `${base}${data.url}`;
@@ -113,13 +139,14 @@ export function CampaignEditPanel({
         setEmailRequired(c.email_required ?? true);
         setStartsAt(c.starts_at ? String(c.starts_at).slice(0, 16) : "");
         setEndsAt(c.ends_at ? String(c.ends_at).slice(0, 16) : "");
+        setCampaignKindId(c.campaign_kind_id != null ? String(c.campaign_kind_id) : "");
       } catch {
         setError("取得に失敗しました");
       } finally {
         setLoading(false);
       }
     })();
-  }, [code]);
+  }, [code, token]);
 
   const saveCampaign = useCallback(
     async (after: "close" | "notice") => {
@@ -127,27 +154,29 @@ export function CampaignEditPanel({
       setSaving(true);
       setError(null);
       try {
+        const body: Record<string, unknown> = {
+          name,
+          key_visual_url: keyVisualUrl || null,
+          key_text: keyText || null,
+          products_json: productsToJson(products),
+          thank_you_message: thankYouMessage || null,
+          landing_url: landingUrl.trim() ? landingUrl : null,
+          no_landing_end_message: noLandingEndMessage.trim() ? noLandingEndMessage.trim() : null,
+          lp_background_key: lpBackgroundKey,
+          lp_intro_title: lpIntroTitle.trim() ? lpIntroTitle.trim() : null,
+          lp_intro_image_url: lpIntroImageUrl.trim() ? lpIntroImageUrl.trim() : null,
+          lp_intro_text: lpIntroText.trim() ? lpIntroText.trim() : null,
+          vote_max_products: voteMaxProducts,
+          vote_confirm_title: voteConfirmTitle.trim() ? voteConfirmTitle.trim() : null,
+          vote_confirm_body: voteConfirmBody.trim() ? voteConfirmBody.trim() : null,
+          email_required: emailRequired,
+          starts_at: startsAt.trim() ? new Date(startsAt).toISOString() : null,
+          ends_at: endsAt.trim() ? new Date(endsAt).toISOString() : null,
+        };
+        if (campaignKindId.trim() !== "") body.campaign_kind_id = Number(campaignKindId);
         await apiPatch<Campaign>(
           `/admin/campaigns/${encodeURIComponent(code)}`,
-          {
-            name,
-            key_visual_url: keyVisualUrl || null,
-            key_text: keyText || null,
-            products_json: productsToJson(products),
-            thank_you_message: thankYouMessage || null,
-            landing_url: landingUrl.trim() ? landingUrl : null,
-            no_landing_end_message: noLandingEndMessage.trim() ? noLandingEndMessage.trim() : null,
-            lp_background_key: lpBackgroundKey,
-            lp_intro_title: lpIntroTitle.trim() ? lpIntroTitle.trim() : null,
-            lp_intro_image_url: lpIntroImageUrl.trim() ? lpIntroImageUrl.trim() : null,
-            lp_intro_text: lpIntroText.trim() ? lpIntroText.trim() : null,
-            vote_max_products: voteMaxProducts,
-            vote_confirm_title: voteConfirmTitle.trim() ? voteConfirmTitle.trim() : null,
-            vote_confirm_body: voteConfirmBody.trim() ? voteConfirmBody.trim() : null,
-            email_required: emailRequired,
-            starts_at: startsAt.trim() ? new Date(startsAt).toISOString() : null,
-            ends_at: endsAt.trim() ? new Date(endsAt).toISOString() : null,
-          },
+          body,
           { headers: { Authorization: `Bearer ${token}` } },
         );
         onSaved?.({ code, name });
@@ -179,6 +208,7 @@ export function CampaignEditPanel({
       emailRequired,
       startsAt,
       endsAt,
+      campaignKindId,
       onClose,
       onSaved,
     ],
@@ -191,12 +221,6 @@ export function CampaignEditPanel({
           企画コード: <span className="font-mono text-slate-200">{code}</span>
         </div>
       </div>
-
-      {!token ? (
-        <div className="rounded-2xl border border-rose-800/60 bg-rose-950/20 p-4 text-sm text-rose-200">
-          ログイン情報がありません。先にログインしてください。
-        </div>
-      ) : null}
 
       {loading ? <div className="text-sm text-slate-300">読み込み中...</div> : null}
       {error ? (
@@ -238,6 +262,29 @@ export function CampaignEditPanel({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
+            </label>
+
+            <label className="block text-sm text-slate-200">
+              企画種別
+              <select
+                className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-slate-50 outline-none focus:border-indigo-400"
+                value={campaignKindId}
+                onChange={(e) => setCampaignKindId(e.target.value)}
+                disabled={!token || campaignKinds.length === 0}
+              >
+                {campaignKinds.length === 0 ? (
+                  <option value="">読み込み中…</option>
+                ) : (
+                  <>
+                    {campaignKinds.length > 1 ? <option value="">選択してください</option> : null}
+                    {campaignKinds.map((k) => (
+                      <option key={k.id} value={String(k.id)}>
+                        {k.name}
+                      </option>
+                    ))}
+                  </>
+                )}
+              </select>
             </label>
 
             <div className="grid gap-4 sm:grid-cols-2">

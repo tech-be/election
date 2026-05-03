@@ -20,6 +20,8 @@ class Tenant(SQLModel, table=True):
     active: bool = Field(default=True)
     # シスアドがテナント単位でクーポン機能の利用を許可するか（無効時は当該テナント向け管理API・投票時の発行を停止）。既定は OFF。
     coupons_enabled: bool = Field(default=False)
+    # テナントあたり作成可能な企画数の上限（シスアドが変更可能）
+    max_campaigns: int = Field(default=3)
     # 任意（画面入力なし想定。シスアドAPIやDBで設定）
     phone: Optional[str] = Field(default=None, max_length=64)
     address: Optional[str] = Field(default=None, max_length=2000)
@@ -48,6 +50,15 @@ class SessionToken(SQLModel, table=True):
     user_id: int = Field(foreign_key="users.id", index=True)
     created_at: datetime = Field(default_factory=utcnow)
     expires_at: Optional[datetime] = None
+
+
+class CampaignKind(SQLModel, table=True):
+    """企画種別マスタ（例: 人気投票）。"""
+
+    __tablename__ = "campaign_kinds"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(max_length=100, unique=True, index=True)
 
 
 class CampaignBase(SQLModel):
@@ -83,6 +94,7 @@ class Campaign(CampaignBase, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     tenant_id: int = Field(foreign_key="tenants.id", index=True)
+    campaign_kind_id: int = Field(foreign_key="campaign_kinds.id", index=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -107,9 +119,11 @@ class CampaignCreate(CampaignBase):
     """シスアドが企画を作るときは tenant_id を指定する（テナント配下ユーザはサーバ側で付与）。"""
 
     tenant_id: Optional[int] = Field(default=None)
+    campaign_kind_id: Optional[int] = Field(default=None)
 
 
 class CampaignUpdate(SQLModel):
+    campaign_kind_id: Optional[int] = None
     name: Optional[str] = Field(default=None, max_length=200)
     key_visual_url: Optional[str] = Field(default=None, max_length=500)
     key_text: Optional[str] = None
@@ -209,6 +223,11 @@ class CouponIssue(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+# 問い合わせの対応状態（管理画面で変更）
+INQUIRY_STATUS_VALUES: frozenset[str] = frozenset({"着信", "処理中", "完了", "対象外"})
+INQUIRY_STATUS_DEFAULT = "着信"
+
+
 class Inquiry(SQLModel, table=True):
     __tablename__ = "inquiries"
 
@@ -216,6 +235,24 @@ class Inquiry(SQLModel, table=True):
     name: str = Field(default="", max_length=200)
     email: str = Field(max_length=254, index=True)
     message: str
+    status: str = Field(default=INQUIRY_STATUS_DEFAULT, max_length=20)
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class AdminOperationLog(SQLModel, table=True):
+    """
+    管理画面の操作履歴（誰が・どの画面で・何をしたか）。
+    トップLP・投票LP・クーポン公開LPは記録対象外とする（アプリ側で書き込まないこと）。
+    """
+
+    __tablename__ = "admin_operation_logs"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    screen: str = Field(max_length=300, index=True)
+    operation: str = Field(max_length=200, index=True)
+    api_name: Optional[str] = Field(default=None, max_length=128, index=True)
+    detail: Optional[str] = Field(default=None, max_length=8000)
     created_at: datetime = Field(default_factory=utcnow, index=True)
 
 
