@@ -3,6 +3,9 @@ export type Tenant = {
   name: string;
   active: boolean;
   coupons_enabled: boolean;
+  /** 任意（未設定時は null） */
+  phone?: string | null;
+  address?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -14,6 +17,8 @@ export type AuthMe = {
   tenant_id: number | null;
   /** テナント／ユーザ権限のときのみ。シスアドは null */
   tenant_coupons_enabled: boolean | null;
+  /** テナント／ユーザ権限のときのみ。シスアドは null */
+  tenant_name?: string | null;
 };
 
 export type Campaign = {
@@ -98,6 +103,24 @@ export type VoteSubmitConflictResponse = {
   thank_you_message?: string | null;
   coupon_tokens?: string[];
   couponTokens?: string[];
+};
+
+export type Inquiry = {
+  id: number;
+  name: string;
+  email: string;
+  message: string;
+  created_at: string;
+};
+
+/** POST /public/register-tenant 成功時（平文パスワードはこのレスポンスのみ） */
+export type PublicTenantRegisterResponse = {
+  ok: boolean;
+  tenant_id: number;
+  tenant_name: string;
+  user_id: number;
+  email: string;
+  password: string;
 };
 
 export async function apiPostWithStatus<T>(

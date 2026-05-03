@@ -22,7 +22,7 @@ def upgrade() -> None:
         conn.execute(
             sa.text(
                 "INSERT INTO tenants (name, created_at, updated_at) "
-                "VALUES ('未分類', now(), now())"
+                "VALUES ('シスアド用', now(), now())"
             )
         )
     conn.execute(

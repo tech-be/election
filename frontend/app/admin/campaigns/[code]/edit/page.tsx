@@ -22,7 +22,6 @@ export default function AdminCampaignEditPage() {
     <main className="w-full max-w-none space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="text-xs text-slate-400">管理画面</div>
           <h1 className="text-2xl font-semibold tracking-tight">企画編集</h1>
         </div>
         <button
